@@ -1,4 +1,4 @@
-# Clock, Themes, Pace Marker, Button Config & Settings Web UI
+# Clock, Themes, Pace Marker, Button Config, Credential Update & Settings Web UI
 
 **Date:** 2026-11-11  
 **Branch:** wifi-native  
@@ -15,8 +15,10 @@ story is a one-time captive portal (SSID/pass/token) and a few serial commands.
 
 The firmware already has NTP sync (`configTime` runs after every WiFi connect), so the clock
 feature is simpler here than upstream: no epoch handshake needed. The design adds the clock,
-ports two other pure upstream features (pace marker, button actions), and builds a lightweight
-settings web UI accessible from any browser on the LAN.
+ports two other pure upstream features (pace marker, button actions), adds runtime theme
+selection, and builds a lightweight settings web UI accessible from any browser on the LAN.
+That same web UI also covers credential updates (Wi-Fi SSID/password and Anthropic token), with
+a safety-revert mechanism for Wi-Fi changes so a typo cannot brick the device.
 
 ---
 
@@ -26,10 +28,15 @@ settings web UI accessible from any browser on the LAN.
 2. Add a pace marker to the usage bars (opt-in; pure port from upstream).
 3. Make button actions configurable (presets; pure port from upstream).
 4. Add runtime theme selection from upstream's 11 preset palettes.
-5. Surface all device settings — new and existing (brightness, chime) — via a web page at
+5. Allow updating Wi-Fi credentials and Anthropic token from the settings web UI.
+   - Wi-Fi changes: device reboots and tries new credentials; reverts to previous if they fail
+     within 30 s, then flags the rollback on-screen.
+   - The revert safety can be disabled per-save (for deliberate network moves).
+   - Serial commands always work regardless of web UI state.
+6. Surface all device settings — new and existing (brightness, chime) — via a web page at
    `http://clawdmeter.local/settings` while the device is connected to WiFi.
-6. No new dependencies beyond what the ESP32 Arduino core already ships.
-7. No restart required when any setting changes.
+7. No new dependencies beyond what the ESP32 Arduino core already ships.
+8. No restart required when changing device preferences. Wi-Fi credential changes reboot.
 
 ---
 
@@ -99,7 +106,14 @@ All settings use the existing `"clawdmeter"` namespace in `Preferences`. New key
 | `btn_k3` | int32 | 0 (None) | PWR button HID action (screen-cycle is always the device behavior) |
 | `theme` | string | `""` (Dark) | 66 hex chars — 11 × `rrggbb` palette (same wire format as upstream's `th`) |
 
-Existing keys `brt_lvl` and `chime` are unchanged.
+| `ssid_new` | string | `""` | Pending Wi-Fi SSID (cleared after trial) |
+| `pass_new` | string | `""` | Pending Wi-Fi password (cleared after trial) |
+| `no_revert` | bool | false | Skip rollback when true (user opted out of safety) |
+| `reverted` | bool | false | Set true when a pending trial fails and reverts; cleared after display |
+
+Existing keys `ssid`, `pass`, `token`, `brt_lvl`, and `chime` are unchanged.
+Serial commands (`ssid`, `pass`, `token`) write directly to the current slots and bypass the
+pending/trial flow entirely — they are the emergency recovery path and always work.
 
 ---
 
@@ -234,6 +248,12 @@ The `captive_portal_start()` calls `settings_server_stop()` then directly calls
 `s_server.begin()` with the portal routes. The `captive_portal_stop()` calls `s_server.stop()`
 then `settings_server_start()`.
 
+Additional routes handled by `settings_server`:
+
+| Route | Handler |
+|-------|---------|
+| `POST /save-connection` | Update token (immediate) and/or Wi-Fi creds (pending + reboot) |
+
 #### Settings HTML page
 
 A single self-contained HTML page (inline in `settings_server.cpp`, styled to match the
@@ -272,12 +292,60 @@ sections with form fields:
 6. **Chime**
    - Checkbox: "Play session-reset chime" (`chime`)
 
-Single "Save" button POSTs all fields to `/save-settings`. The handler applies each setting live
-(no restart). Response is a "Saved ✓" page with a link back to `/settings`.
+7. **Connection** *(separate form, separate POST — triggers a reboot)*
+   - **Wi-Fi network** — SSID text field (pre-filled with current SSID)
+   - **Wi-Fi password** — password field (empty; placeholder "leave blank to keep current")
+   - **Anthropic token** — password field (pre-filled with first 20 chars + "…"; placeholder
+     "leave blank to keep current")
+   - **Safety revert** — checkbox: "Revert to previous Wi-Fi settings if new connection fails
+     within 30 s" (checked by default; unchecked maps to `no_revert = true`)
+   - Save button: "Save & Reboot" (or "Save" for token-only, no reboot if SSID/pass unchanged)
+   - If only the token changed: apply immediately (no reboot), confirm inline.
+   - If SSID or password changed: write to pending NVS slots, respond with a "Rebooting…" page,
+     call `ESP.restart()` after a 500 ms delay so the HTTP response reaches the browser.
+
+Sections 1–6 share one "Save" button and POST to `/save-settings` (apply live, no reboot).
+Section 7 POSTs to `/save-connection` (may reboot).
 
 ---
 
 ## Modified files
+
+### `firmware/src/provisioning.{h,cpp}`
+
+New API additions (existing API unchanged):
+
+```cpp
+// Pending Wi-Fi credentials (written by /save-connection, tried on next boot).
+void provisioning_save_pending_wifi(const char* ssid, const char* pass);
+bool provisioning_has_pending_wifi(void);  // pending slots non-empty
+
+// Called by wifi_poller when it starts connecting: if pending is present,
+// returns the pending creds and arms the trial timer. Otherwise returns current.
+void provisioning_get_trial_creds(String& ssid_out, String& pass_out);
+
+// Called by wifi_poller on successful connect: promote pending → current, clear pending.
+void provisioning_promote_pending(void);
+
+// Called by wifi_poller on trial timeout: restore current creds, set reverted = true, clear pending.
+void provisioning_revert_pending(void);
+
+// True once after a revert, then clears the flag. Called by main.cpp to show the status overlay.
+bool provisioning_take_reverted(void);
+
+// no_revert flag (written by /save-connection, read in provisioning_save_pending_wifi).
+// When true, save-connection writes directly to current slots (bypasses pending entirely).
+bool provisioning_no_revert(void);
+void provisioning_set_no_revert(bool v);
+```
+
+**Trial timer:** `provisioning_get_trial_creds()` records `millis()` and the trial timeout
+(30 s, `PENDING_TRIAL_MS`). `wifi_poller` calls `provisioning_trial_timed_out()` from its
+`WIFI_ST_CONNECTING` branch when the trial has been active longer than the timeout.
+
+**Serial path unchanged:** `provisioning_handle_cmd("ssid …")` / `pass` / `token` write
+directly to `ssid`/`pass`/`token` NVS keys and in-memory, with no involvement of pending slots.
+This is explicitly the emergency recovery path and must stay unconditional.
 
 ### `firmware/src/captive_portal.{h,cpp}`
 
@@ -290,12 +358,28 @@ Single "Save" button POSTs all fields to `/save-settings`. The handler applies e
 
 ### `firmware/src/wifi_poller.cpp`
 
-In `wifi_poller_tick()`, in the `WIFI_ST_CONNECTING → WIFI_ST_CONNECTED` transition branch,
-after the existing `configTime(0, 0, "pool.ntp.org")` call, add:
+**Pending credential trial:**
 
+`wifi_poller_init()` calls `provisioning_get_trial_creds()` to obtain the SSID/pass to try
+(pending if present, current otherwise). This replaces the existing direct call to
+`provisioning_get_ssid/pass`.
+
+In `wifi_poller_tick()`, in the `WIFI_ST_CONNECTING` branch, add a trial-timeout check:
 ```cpp
-clock_pref_apply_tz();         // setenv TZ + tzset so localtime_r() gives local time
-settings_server_start();       // start the web UI + mDNS
+if (provisioning_has_pending_wifi() && provisioning_trial_timed_out()) {
+    WiFi.disconnect();
+    provisioning_revert_pending();   // clears pending, sets reverted flag
+    begin_connect();                 // reconnect with current (reverted) creds
+    return;
+}
+```
+
+In the `WIFI_ST_CONNECTING → WIFI_ST_CONNECTED` transition:
+```cpp
+provisioning_promote_pending();  // no-op if no pending; promotes if trial succeeded
+configTime(0, 0, "pool.ntp.org");
+clock_pref_apply_tz();
+settings_server_start();
 ```
 
 `settings_server_start()` is idempotent (no-op if already running).
@@ -382,6 +466,17 @@ offered in the web UI because the fork removed brightness presets in favor of a 
 slider. The decode of a stored value of 6 therefore maps to `BTN_KIND_BRIGHTNESS` which
 the button handler treats as a no-op (brightness cycle is unavailable).
 
+**Revert flag check** in `loop()` (after `wifi_poller_tick()`):
+```cpp
+if (provisioning_take_reverted()) {
+    // Pending Wi-Fi credentials failed — show a persistent status overlay.
+    ui_set_status(UI_STATUS_WARN,
+        "Wi-Fi change failed - reverted to previous settings");
+}
+```
+`ui_set_status` with `UI_STATUS_WARN` pins the message until a successful poll clears it
+(existing behavior — the wifi-status overlay logic in main.cpp already does this).
+
 ---
 
 ## Interaction between web UI and on-device settings
@@ -401,6 +496,14 @@ screen visually reflects the new value. No restart needed.
 - `/save-settings` with an unknown theme preset id: ignored (keeps previous palette).
 - Stored `theme` NVS string with wrong length or non-hex chars: `theme_pref_load()` falls back
   to Dark silently.
+- `/save-connection` with blank SSID and blank password: treat as token-only update (no reboot).
+- `/save-connection` with blank token: keep existing token.
+- `/save-connection` with blank password: keep existing password (only SSID changed — still
+  triggers pending/reboot flow, since the SSID changed).
+- Revert: if device has never successfully connected with current creds (e.g. pending was the
+  first-ever credentials and failed), `provisioning_revert_pending()` leaves `ssid`/`pass` as
+  empty strings; the existing `WIFI_POLL_NO_CREDS` path and auto-portal logic handle this
+  naturally (the device falls into the captive-portal flow as it would on a fresh flash).
 
 ---
 
@@ -416,4 +519,14 @@ screen visually reflects the new value. No restart needed.
   server resumes after stopping the portal.
 - Theme: switch to Nord, verify the display repaints live (background, bars, text all change).
   Switch back to Dark. Screenshot both.
+- Credential update — happy path: submit correct new Wi-Fi credentials, device reboots,
+  connects, `clawdmeter.local` is reachable again, settings page shows new SSID.
+- Credential update — revert path: submit deliberately wrong password with safety on, device
+  reboots, fails to connect within 30 s, reverts to previous network, status overlay shows
+  "Wi-Fi change failed — reverted to previous settings", device is reachable again.
+- Safety disabled: submit wrong password with "revert" unchecked, device reboots and stays
+  disconnected (no overlay — the device simply couldn't connect; existing wifi-fail handling).
+- Token update: submit new token without changing SSID/pass, no reboot, next poll uses new token.
+- Serial: with the device connected, run `ssid newsid` over serial, verify it takes effect
+  (direct NVS write, no pending, existing reconnect path).
 - Screenshot command: take a screenshot with clock on and off to verify title render.
