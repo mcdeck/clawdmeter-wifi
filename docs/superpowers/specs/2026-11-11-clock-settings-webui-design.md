@@ -1,0 +1,341 @@
+# Clock, Pace Marker, Button Config & Settings Web UI
+
+**Date:** 2026-11-11  
+**Branch:** wifi-native  
+**Author:** Oliver van Porten
+
+---
+
+## Context
+
+The wifi fork polls the Anthropic API directly from the ESP32 — no desktop app, no daemon. The
+upstream (Clawdmeter) delivers device settings (clock, pace marker, button mapping, theme, etc.)
+via the Rust desktop app over BLE. This fork has no equivalent mechanism: today's configuration
+story is a one-time captive portal (SSID/pass/token) and a few serial commands.
+
+The firmware already has NTP sync (`configTime` runs after every WiFi connect), so the clock
+feature is simpler here than upstream: no epoch handshake needed. The design adds the clock,
+ports two other pure upstream features (pace marker, button actions), and builds a lightweight
+settings web UI accessible from any browser on the LAN.
+
+---
+
+## Goals
+
+1. Replace the "Usage" title with the current local time (opt-in, TZ-aware, 12h/24h).
+2. Add a pace marker to the usage bars (opt-in; pure port from upstream).
+3. Make button actions configurable (presets; pure port from upstream).
+4. Surface all device settings — new and existing (brightness, chime) — via a web page at
+   `http://clawdmeter.local/settings` while the device is connected to WiFi.
+5. No new dependencies beyond what the ESP32 Arduino core already ships.
+6. No restart required when any setting changes.
+
+---
+
+## Out of scope
+
+- Custom keyboard shortcut entry in the web UI (presets only for buttons).
+- Liveliness / attention animation / theme palette (require the Clawd director subsystem).
+- Upstream's `acct:"week"` path changes (no-5h-limit accounts) — already handled in the fork.
+
+---
+
+## Architecture
+
+### Shared WebServer (port 80)
+
+The captive portal and the settings server cannot both own a `WebServer` on port 80 at the same
+time. They are mutually exclusive modes (the device is never simultaneously in AP and station
+mode), so they share one `WebServer` instance owned by `settings_server`. The captive portal
+module is refactored internally but its external API (`captive_portal_start/stop/tick/is_active`)
+is unchanged.
+
+`settings_server` exports one extra call that the captive portal uses:
+
+```cpp
+void settings_server_begin_portal(void);  // stop settings routes, start portal routes, s_server.begin()
+void settings_server_tick(void);          // s_server.handleClient(); called from captive_portal_tick()
+```
+
+**Lifecycle:**
+```
+setup()                  → settings_server_init()        (register settings routes; don't start yet)
+wifi connected           → settings_server_start()       (s_server.begin() + mDNS)
+captive_portal_start()   → settings_server_stop()        (s_server.stop() + mDNS end)
+                           settings_server_begin_portal() (re-register portal routes, s_server.begin())
+                           s_dns.start(...)
+captive_portal_stop()    → s_dns.stop(); s_server.stop()
+                           settings_server_start()        (settings routes, s_server.begin(), mDNS)
+```
+
+`captive_portal_tick()` calls `settings_server_tick()` (instead of `s_server.handleClient()`
+directly) so that `captive_portal.cpp` has no direct dependency on the WebServer instance.
+
+The settings server runs only in station mode. During the AP-mode captive portal the WebServer
+serves the provisioning form, identical to today.
+
+### mDNS
+
+`ESPmDNS` (part of the ESP32 Arduino core, no extra `lib_deps`) advertises:
+- hostname `clawdmeter` → resolves to the device's station IP
+- service `_http._tcp` port 80
+
+`http://clawdmeter.local/` redirects to `/settings`. The raw IP also works.
+
+### NVS namespaces
+
+All settings use the existing `"clawdmeter"` namespace in `Preferences`. New keys:
+
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `clk_on` | bool | true | Clock displayed on Usage screen |
+| `clk_fmt` | uint8 | 24 | 12 or 24 (hour format) |
+| `clk_tz` | string | `"UTC0"` | POSIX TZ string |
+| `pace_on` | bool | false | Pace marker on usage bars |
+| `btn_k1` | int32 | 1 (Space) | PRIMARY button action |
+| `btn_k2` | int32 | 2 (Shift+Tab) | SECONDARY button action |
+| `btn_k3` | int32 | 0 (None) | PWR button HID action (screen-cycle is always the device behavior) |
+
+Existing keys `brt_lvl` and `chime` are unchanged.
+
+---
+
+## New files
+
+### `firmware/src/tz_list.h`
+
+Compile-time `const struct { const char* name; const char* posix; }` array of ~50 named
+timezones grouped by region (Americas, Europe, Africa, Asia, Pacific). Each entry maps a
+friendly name to its POSIX TZ string, e.g.:
+
+```cpp
+{"Europe/Berlin",   "CET-1CEST,M3.5.0,M10.5.0/3"},
+{"America/New_York","EST5EDT,M3.2.0,M11.1.0"},
+{"Asia/Tokyo",      "JST-9"},
+```
+
+The list is a header-only array; no .cpp needed. Used by `clock_pref.cpp` and the settings
+server's HTML generator.
+
+### `firmware/src/clock_pref.{h,cpp}`
+
+```cpp
+void clock_pref_load(void);        // load from NVS; call before ui_init()
+void clock_pref_apply_tz(void);    // setenv("TZ",…) + tzset(); call after configTime()
+bool clock_pref_on(void);
+int  clock_pref_fmt(void);         // 12 or 24
+const char* clock_pref_tz(void);   // POSIX string
+void clock_pref_set(bool on, int fmt, const char* posix_tz);  // save + apply
+```
+
+`clock_pref_apply_tz()` is called by `wifi_poller.cpp` after every `configTime()` call (NTP sync
+fires once per connect), so the TZ is always in effect before the first tick.
+
+### `firmware/src/pace_pref.{h,cpp}`
+
+```cpp
+void pace_pref_load(void);         // load from NVS; calls ui_set_pace_marker()
+bool pace_pref_get(void);
+void pace_pref_set(bool on);       // save + call ui_set_pace_marker()
+```
+
+Thin wrapper; the actual pace rendering lives in `ui.cpp`.
+
+### `firmware/src/button_pref.{h,cpp}`
+
+```cpp
+void    button_pref_load(void);                       // load from NVS
+int32_t button_pref_get(ButtonSlot slot);             // current value for slot
+void    button_pref_set(ButtonSlot slot, int32_t v);  // save; validated with button_action_valid()
+```
+
+`ButtonSlot` and `button_action_valid/decode` come from the ported `button_action.h`.
+
+### `firmware/src/button_action.{h,cpp}`
+
+Verbatim port from upstream. Pure logic (no Arduino types). Covers presets, keyboard chords,
+consumer keys. The fork uses only presets (0–6) from the web UI; the full codec is kept so the
+NVS format stays upstream-compatible.
+
+### `firmware/src/pace.{h,cpp}`
+
+Verbatim port from upstream. Pure math. `pace_elapsed_pct()` and `pace_level()`.
+
+### `firmware/src/settings_server.{h,cpp}`
+
+```cpp
+void settings_server_init(void);   // register routes; call in setup()
+void settings_server_start(void);  // begin WebServer + mDNS; call when WiFi connects
+void settings_server_stop(void);   // end WebServer + mDNS; call before captive portal starts
+bool settings_server_running(void);
+```
+
+The module owns the `WebServer` on port 80 and the `ESPmDNS` instance. Routes:
+
+| Route | Handler |
+|-------|---------|
+| `GET /` | redirect to `/settings` |
+| `GET /settings` | serve settings HTML page |
+| `POST /save-settings` | read fields, call pref setters, respond with confirmation |
+| Catch-all (AP mode) | provisioning form (registered by captive_portal.cpp at start) |
+
+The `captive_portal_start()` calls `settings_server_stop()` then directly calls
+`s_server.begin()` with the portal routes. The `captive_portal_stop()` calls `s_server.stop()`
+then `settings_server_start()`.
+
+#### Settings HTML page
+
+A single self-contained HTML page (inline in `settings_server.cpp`, styled to match the
+captive portal aesthetic: `#1a1a1a` background, `#e8e0d4` text, `#d97757` accent). Five
+sections with form fields:
+
+1. **Clock**
+   - Checkbox: "Show clock on Usage screen" (`clk_on`)
+   - Radio: "24-hour" / "12-hour" (`clk_fmt`)
+   - `<select>` dropdown: timezone (`clk_tz`), options generated from `tz_list.h`, grouped with
+     `<optgroup label="...">` by region. The currently stored POSIX string selects the matching
+     option.
+
+2. **Pace marker**
+   - Checkbox: "Show pace marker on usage bars" (`pace_on`)
+   - One-line description: "Marks where usage would be if spent evenly; green = on pace,
+     amber = ahead, red = at limit."
+
+3. **Buttons**
+   - Three `<select>` dropdowns: "Primary (left)", "Secondary (right)", "PWR" (`btn_k1/k2/k3`).
+   - Options: None / Space (voice PTT) / Shift+Tab (mode toggle) / Tab / Enter / Escape.
+   - Note: `BTN_ACT_BRIGHTNESS` (preset 6) is excluded. The fork uses a continuous brightness
+     slider (no presets to cycle); that upstream preset has no meaningful equivalent here.
+   - PWR always cycles screens as a device behavior regardless of k3; k3 only controls the HID
+     event that fires alongside it (default: none).
+
+4. **Brightness**
+   - `<input type="range" min="10" max="100">` (`brt_lvl`)
+
+5. **Chime**
+   - Checkbox: "Play session-reset chime" (`chime`)
+
+Single "Save" button POSTs all fields to `/save-settings`. The handler applies each setting live
+(no restart). Response is a "Saved ✓" page with a link back to `/settings`.
+
+---
+
+## Modified files
+
+### `firmware/src/captive_portal.{h,cpp}`
+
+- Extract the `WebServer s_server` global to `settings_server.cpp`.
+- `captive_portal_start()`: calls `settings_server_stop()`, re-registers portal routes on the
+  shared server, then calls `s_server.begin()`.
+- `captive_portal_stop()`: calls `s_server.stop()`, then `settings_server_start()`.
+- `captive_portal_tick()`: still calls `s_server.handleClient()` and `s_dns.processNextRequest()`.
+- External API, portal HTML, and save handler are unchanged.
+
+### `firmware/src/wifi_poller.cpp`
+
+In `wifi_poller_tick()`, in the `WIFI_ST_CONNECTING → WIFI_ST_CONNECTED` transition branch,
+after the existing `configTime(0, 0, "pool.ntp.org")` call, add:
+
+```cpp
+clock_pref_apply_tz();         // setenv TZ + tzset so localtime_r() gives local time
+settings_server_start();       // start the web UI + mDNS
+```
+
+`settings_server_start()` is idempotent (no-op if already running).
+
+### `firmware/src/ui.{h,cpp}`
+
+**Clock rendering:**
+
+Add static vars `clock_last_min` (int, -1) in `ui.cpp`. In `ui_tick_anim()`, when
+`clock_pref_on()` is true and `time(nullptr) > 1000000000L` (NTP synced):
+
+```cpp
+time_t now = time(nullptr);
+struct tm t;
+localtime_r(&now, &t);
+if (t.tm_min != clock_last_min) {
+    clock_last_min = t.tm_min;
+    char buf[16];
+    if (clock_pref_fmt() == 12) {
+        int h = t.tm_hour % 12; if (!h) h = 12;
+        snprintf(buf, sizeof(buf), "%d:%02d %s", h, t.tm_min, t.tm_hour < 12 ? "AM" : "PM");
+    } else {
+        snprintf(buf, sizeof(buf), "%d:%02d", t.tm_hour, t.tm_min);
+    }
+    lv_label_set_text(lbl_title, buf);
+}
+```
+
+When `clock_pref_on()` is false, or NTP not synced, `lbl_title` shows "Usage". On a settings
+change, `clock_last_min` is reset to -1 so the title updates immediately.
+
+Add `ui_clock_invalidate()` (called by `clock_pref_set()`) to trigger the immediate redraw.
+
+**Pace marker:**
+
+Add `ui_set_pace_marker(bool)` to `ui.h`. In `ui.cpp`:
+- Two thin vertical bar objects (`lv_obj_t* tick_session, tick_weekly`), 2 px wide, full bar
+  height, hidden by default. Created inside `build_usage_screen()`.
+- `ui_set_pace_marker(bool on)` sets `pace_marker` static bool and forces a full `ui_update()`
+  redraw with the last-known usage data (store a copy: `static UsageData s_last_data`).
+- In `ui_update()`, when `pace_marker` is true: position each tick at
+  `pace_elapsed_pct(reset_mins, window_mins)` and color the bar fill via `pace_level()`.
+
+**`ui_settings_refresh()`** — extended to also reflect `pace_pref_get()` and
+`button_pref_get()` (the settings screen doesn't show buttons, but calling `ui_settings_refresh`
+after a web save keeps the on-device brightness slider and chime switch in sync with NVS).
+
+### `firmware/src/main.cpp`
+
+**`setup()`** additions (after `chime_pref_load()`):
+```cpp
+clock_pref_load();
+pace_pref_load();      // calls ui_set_pace_marker() — must be after ui_init()
+button_pref_load();
+settings_server_init();
+```
+
+Note: `pace_pref_load()` calls `ui_set_pace_marker()`, which needs `ui_init()` to have run
+first. Order: `ui_init()` → `pace_pref_load()`.
+
+**Button handling** in `loop()`: replace hardcoded `ble_keyboard_press(0x2C, 0)` etc. with calls
+through `button_action_decode(button_pref_get(BTN_SLOT_PRIMARY))`. The decode returns a
+`ButtonBinding`; the handler sends the appropriate HID report.
+
+PWR always cycles screens (`ui_cycle_screen()` / `splash_next()`) as a device behavior; k3
+controls the HID event that fires on a PWR press. `BTN_ACT_BRIGHTNESS` (preset 6) is not
+offered in the web UI because the fork removed brightness presets in favor of a continuous
+slider. The decode of a stored value of 6 therefore maps to `BTN_KIND_BRIGHTNESS` which
+the button handler treats as a no-op (brightness cycle is unavailable).
+
+---
+
+## Interaction between web UI and on-device settings
+
+When the web UI saves brightness or chime, it calls the same setters as the on-device settings
+screen. `ui_settings_refresh()` is called after a web save so the slider/switch on the settings
+screen visually reflects the new value. No restart needed.
+
+---
+
+## Error handling
+
+- NTP not synced (`time(nullptr) < 1000000000L`): clock rendering skipped; "Usage" title shown.
+- Unknown TZ POSIX string: `setenv`/`tzset` silently falls back to UTC; the UI still shows time.
+- `/save-settings` with an out-of-range brightness (< 10 or > 100): clamped to [10, 100].
+- `/save-settings` with an invalid button action integer: ignored (keeps previous value).
+
+---
+
+## Testing
+
+- Build both envs (`pio run -d firmware -e waveshare_amoled_216 -e waveshare_amoled_18`).
+- Hardware: connect to WiFi, navigate to `http://clawdmeter.local/settings` from a phone browser,
+  change each setting, verify live update on device.
+- Clock: set TZ to a region 2+ hours from UTC, verify displayed time matches the phone.
+- Pace marker: enable, observe bar fill and tick position change.
+- Button remap: set Primary to Tab, verify Tab HID report reaches the host.
+- Existing captive portal: press "Start Hotspot", verify portal still works, verify settings
+  server resumes after stopping the portal.
+- Screenshot command: take a screenshot with clock on and off to verify title render.
