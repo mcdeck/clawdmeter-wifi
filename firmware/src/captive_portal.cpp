@@ -1,5 +1,6 @@
 #include "captive_portal.h"
 #include "provisioning.h"
+#include "settings_server.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
@@ -109,6 +110,7 @@ void captive_portal_start(void) {
     if (s_active) return;
     s_active = true;
 
+    settings_server_stop();  // release port 80 before AP-mode server binds it
     WiFi.mode(WIFI_AP);
     WiFi.softAP(PORTAL_SSID);
     Serial.printf("portal: AP \"%s\" up, IP=%s\n",

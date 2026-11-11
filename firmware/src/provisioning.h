@@ -13,3 +13,8 @@ String   provisioning_get_token(void);
 // Write ssid + pass (and optionally token) in a single NVS transaction.
 // Pass nullptr for token to leave the stored token unchanged.
 void provisioning_save_wifi(const char* ssid, const char* pass, const char* token);
+
+String provisioning_get_webpass(void);
+String provisioning_get_event_token(void);
+void   provisioning_save_webpass(const char* pass);
+void   provisioning_save_event_token(const char* token);

@@ -15,6 +15,9 @@
 #include "provisioning.h"
 #include "wifi_poller.h"
 #include "captive_portal.h"
+#include "settings_server.h"
+#include "hook_event.h"
+#include "signals.h"
 #include "heap_log.h"
 
 #include "hal/board_caps.h"
@@ -26,6 +29,7 @@
 #include "hal/sound_hal.h"
 
 static UsageData usage = {};
+ClawdHookEvent   g_hook_event = {};
 
 // ---- LVGL draw buffers (partial render mode) ----
 // PSRAM-equipped boards (S3) can comfortably hold larger strips. PSRAM-free
@@ -229,6 +233,7 @@ void setup() {
     input_hal_init();
     wifi_poller_init();
     captive_portal_init();
+    settings_server_init();
     HEAP_LOG("pre ui_init");
 
     ui_init();
@@ -264,6 +269,7 @@ void loop() {
     lv_timer_handler();
     wifi_poller_tick();
     captive_portal_tick();
+    settings_server_tick();
     ui_tick_anim();
     ble_tick();
     power_hal_tick();
@@ -380,6 +386,16 @@ void loop() {
     }
 
     check_serial_cmd();
+
+    if (g_hook_event.pending) {
+        SignalsUpdate su = signals_ingest(&g_hook_event);
+        g_hook_event.pending = false;
+        if (su.event_fired) {
+            Serial.printf("signals: event '%c' seq=%u sessions=%d activity=%d\n",
+                su.event, su.event_seq,
+                signals_sessions(), signals_activity());
+        }
+    }
 
     if (wifi_poller_has_new_data()) {
         wifi_poller_consume_data(&usage);

@@ -1,5 +1,6 @@
 #include "wifi_poller.h"
 #include "provisioning.h"
+#include "settings_server.h"
 #include "heap_log.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -421,6 +422,7 @@ void wifi_poller_tick(void) {
                 Serial.printf("wifi: connected, IP=%s\n",
                     WiFi.localIP().toString().c_str());
                 configTime(0, 0, "pool.ntp.org");
+                settings_server_start();
             } else if (now - s_state_ts >= CONNECT_TIMEOUT_MS) {
                 WiFi.disconnect();
                 s_state    = WIFI_ST_FAILED;
@@ -434,6 +436,7 @@ void wifi_poller_tick(void) {
 
         case WIFI_ST_CONNECTED:
             if (WiFi.status() != WL_CONNECTED) {
+                settings_server_stop();
                 s_state    = WIFI_ST_FAILED;
                 s_state_ts = now;
                 s_status   = WIFI_POLL_WIFI_FAIL;
