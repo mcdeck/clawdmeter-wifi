@@ -1,4 +1,4 @@
-# Clock, Pace Marker, Button Config & Settings Web UI
+# Clock, Themes, Pace Marker, Button Config & Settings Web UI
 
 **Date:** 2026-11-11  
 **Branch:** wifi-native  
@@ -25,17 +25,19 @@ settings web UI accessible from any browser on the LAN.
 1. Replace the "Usage" title with the current local time (opt-in, TZ-aware, 12h/24h).
 2. Add a pace marker to the usage bars (opt-in; pure port from upstream).
 3. Make button actions configurable (presets; pure port from upstream).
-4. Surface all device settings — new and existing (brightness, chime) — via a web page at
+4. Add runtime theme selection from upstream's 11 preset palettes.
+5. Surface all device settings — new and existing (brightness, chime) — via a web page at
    `http://clawdmeter.local/settings` while the device is connected to WiFi.
-5. No new dependencies beyond what the ESP32 Arduino core already ships.
-6. No restart required when any setting changes.
+6. No new dependencies beyond what the ESP32 Arduino core already ships.
+7. No restart required when any setting changes.
 
 ---
 
 ## Out of scope
 
 - Custom keyboard shortcut entry in the web UI (presets only for buttons).
-- Liveliness / attention animation / theme palette (require the Clawd director subsystem).
+- Liveliness / attention animation (require the Clawd director subsystem).
+- Custom color picker in the web UI (preset themes only; 11 presets cover the common cases).
 - Upstream's `acct:"week"` path changes (no-5h-limit accounts) — already handled in the fork.
 
 ---
@@ -95,6 +97,7 @@ All settings use the existing `"clawdmeter"` namespace in `Preferences`. New key
 | `btn_k1` | int32 | 1 (Space) | PRIMARY button action |
 | `btn_k2` | int32 | 2 (Shift+Tab) | SECONDARY button action |
 | `btn_k3` | int32 | 0 (None) | PWR button HID action (screen-cycle is always the device behavior) |
+| `theme` | string | `""` (Dark) | 66 hex chars — 11 × `rrggbb` palette (same wire format as upstream's `th`) |
 
 Existing keys `brt_lvl` and `chime` are unchanged.
 
@@ -161,6 +164,54 @@ NVS format stays upstream-compatible.
 
 Verbatim port from upstream. Pure math. `pace_elapsed_pct()` and `pace_level()`.
 
+### `firmware/src/theme_palette.{h,cpp}`
+
+Verbatim port from upstream. Pure (no Arduino, no LVGL). Owns the live palette array and
+the `theme_parse_hex` / `theme_format_hex` / `theme_palette_set` / `theme_hex` /
+`theme_rgb565` functions.
+
+The fork's `theme.h` currently has hardcoded `lv_color_hex(0x…)` macros. These are **replaced**
+with dynamic wrappers:
+
+```cpp
+// theme.h (after)
+#include "theme_palette.h"
+static inline lv_color_t th_col(ThemeColor c) { return lv_color_hex(theme_hex(c)); }
+#define THEME_BG      th_col(TH_BG)
+#define THEME_PANEL   th_col(TH_PANEL)
+// … etc.
+```
+
+This change is backward-compatible: `ui.cpp` already uses `COL_BG` etc. via those macros; it
+recompiles cleanly. The runtime cost is one integer lookup per style call, negligible.
+
+### `firmware/src/theme_pref.{h,cpp}`
+
+```cpp
+void    theme_pref_load(void);           // load from NVS; calls theme_palette_set(); before ui_init()
+void    theme_pref_set_by_name(const char* preset_id);  // look up palette, save + apply
+const char* theme_pref_current_id(void); // the stored preset id ("dark" if unset)
+```
+
+### `firmware/src/theme_presets.h`
+
+Compile-time `const struct { const char* id; const char* name; uint32_t colors[TH_COUNT]; }`
+array — the 11 presets from upstream's `themes.rs` translated verbatim:
+
+| id | Name |
+|----|------|
+| `dark` | Dark (firmware default) |
+| `light` | Light |
+| `catppuccin_mocha` | Catppuccin Mocha |
+| `dracula` | Dracula |
+| `gruvbox` | Gruvbox |
+| `monokai` | Monokai |
+| `nord` | Nord |
+| `one_dark` | One Dark |
+| `solarized_dark` | Solarized Dark |
+| `solarized_light` | Solarized Light |
+| `tokyo_night` | Tokyo Night |
+
 ### `firmware/src/settings_server.{h,cpp}`
 
 ```cpp
@@ -209,10 +260,16 @@ sections with form fields:
    - PWR always cycles screens as a device behavior regardless of k3; k3 only controls the HID
      event that fires alongside it (default: none).
 
-4. **Brightness**
+4. **Theme**
+   - `<select>` dropdown of the 11 preset names. The currently stored preset id is pre-selected.
+   - Each `<option>` includes a small inline color swatch (three squares: bg, panel, accent)
+     rendered as a short inline SVG data URI so the user can preview at a glance without
+     opening the page on the device.
+
+5. **Brightness**
    - `<input type="range" min="10" max="100">` (`brt_lvl`)
 
-5. **Chime**
+6. **Chime**
    - Checkbox: "Play session-reset chime" (`chime`)
 
 Single "Save" button POSTs all fields to `/save-settings`. The handler applies each setting live
@@ -282,6 +339,19 @@ Add `ui_set_pace_marker(bool)` to `ui.h`. In `ui.cpp`:
 - In `ui_update()`, when `pace_marker` is true: position each tick at
   `pace_elapsed_pct(reset_mins, window_mins)` and color the bar fill via `pace_level()`.
 
+**Theme repaint:**
+
+`theme_pref_set_by_name()` calls `theme_palette_set()` to update the live palette array, then
+calls `ui_repaint_theme()`. That function re-applies `lv_obj_set_style_bg_color()` and all
+other LVGL style properties that use `COL_*` on every persistent object (all panels, bars,
+labels, icons). It then calls `lv_obj_invalidate(lv_screen_active())` to flush. The repaint
+function is extracted from the existing `build_*_screen()` helpers into a separate
+`repaint_*_screen()` path that only touches style properties, not layout or structure.
+
+The `theme.h` macro change (`THEME_BG` etc. → dynamic `th_col(TH_*)` wrappers) means every
+`lv_obj_set_style_bg_color(obj, THEME_BG, 0)` call already resolves from the live palette at
+call time. `ui_repaint_theme()` therefore just re-calls all those style setters and invalidates.
+
 **`ui_settings_refresh()`** — extended to also reflect `pace_pref_get()` and
 `button_pref_get()` (the settings screen doesn't show buttons, but calling `ui_settings_refresh`
 after a web save keeps the on-device brightness slider and chime switch in sync with NVS).
@@ -291,13 +361,16 @@ after a web save keeps the on-device brightness slider and chime switch in sync 
 **`setup()`** additions (after `chime_pref_load()`):
 ```cpp
 clock_pref_load();
+theme_pref_load();     // before ui_init(): applies the saved palette so the UI is built in it
+// … ui_init() …
 pace_pref_load();      // calls ui_set_pace_marker() — must be after ui_init()
 button_pref_load();
 settings_server_init();
 ```
 
-Note: `pace_pref_load()` calls `ui_set_pace_marker()`, which needs `ui_init()` to have run
-first. Order: `ui_init()` → `pace_pref_load()`.
+Order constraints:
+- `theme_pref_load()` before `ui_init()` — the palette must be live when LVGL objects are styled.
+- `pace_pref_load()` after `ui_init()` — calls `ui_set_pace_marker()` which needs the bar objects.
 
 **Button handling** in `loop()`: replace hardcoded `ble_keyboard_press(0x2C, 0)` etc. with calls
 through `button_action_decode(button_pref_get(BTN_SLOT_PRIMARY))`. The decode returns a
@@ -325,6 +398,9 @@ screen visually reflects the new value. No restart needed.
 - Unknown TZ POSIX string: `setenv`/`tzset` silently falls back to UTC; the UI still shows time.
 - `/save-settings` with an out-of-range brightness (< 10 or > 100): clamped to [10, 100].
 - `/save-settings` with an invalid button action integer: ignored (keeps previous value).
+- `/save-settings` with an unknown theme preset id: ignored (keeps previous palette).
+- Stored `theme` NVS string with wrong length or non-hex chars: `theme_pref_load()` falls back
+  to Dark silently.
 
 ---
 
@@ -338,4 +414,6 @@ screen visually reflects the new value. No restart needed.
 - Button remap: set Primary to Tab, verify Tab HID report reaches the host.
 - Existing captive portal: press "Start Hotspot", verify portal still works, verify settings
   server resumes after stopping the portal.
+- Theme: switch to Nord, verify the display repaints live (background, bars, text all change).
+  Switch back to Dark. Screenshot both.
 - Screenshot command: take a screenshot with clock on and off to verify title render.
