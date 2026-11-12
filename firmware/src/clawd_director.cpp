@@ -12,11 +12,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Defined in ui.cpp (Task 6)
-extern lv_obj_t* ui_mascot_parent(void);
-extern bool      ui_meters_live(void);
-extern void      ui_set_alert_text(const char* msg);
-
 // ─── Beats ───────────────────────────────────────────────────────────────────
 // Phase 1 active beats: B_HOME, B_CORNER, B_ATTENTION, B_PEEK.
 // Phase 2 beats stub to B_HOME immediately: B_SHOW, B_SCREENSAVER,
@@ -260,6 +255,7 @@ void director_set_liveliness(int level) {
 
 static void indev_cb(lv_event_t* e) {
     (void)e;
+    if (ui_get_current_screen() != SCREEN_USAGE) return;
     lv_point_t p = { 0, 0 };
     if (touch_indev) lv_indev_get_point(touch_indev, &p);
     director_tap(p.x);
