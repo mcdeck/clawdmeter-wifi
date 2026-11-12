@@ -54,19 +54,54 @@ No daemon, no Python, no Bluetooth pairing required for the usage data.
 
 ### 1. Flash the firmware
 
-**Windows:**
-```powershell
-$env:PYTHONUTF8=1; pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM4
-```
+Replace `waveshare_amoled_216` with `waveshare_amoled_18` for the 1.8" board.
+Close any serial monitor (PuTTY, etc.) before flashing — the port must be free.
 
-**macOS / Linux:**
+**macOS:**
 ```bash
+# Find the port: ls /dev/cu.usbmodem*
 pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/cu.usbmodem101
 ```
 
-Replace `waveshare_amoled_216` with `waveshare_amoled_18` for the 1.8" board.
+**Linux:**
+```bash
+# Find the port: ls /dev/ttyACM*
+pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0
+```
 
-Close any serial monitor (PuTTY, etc.) before flashing — the port must be free.
+**Windows (native):**
+```powershell
+# Find the port: Device Manager → Ports (COM & LPT)
+$env:PYTHONUTF8=1; pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM4
+```
+
+**WSL:**
+
+The ESP32-S3 USB-JTAG port must be forwarded into WSL with
+[usbipd-win](https://github.com/dorssel/usbipd-win) — WSL cannot access
+USB devices directly.
+
+1. Install usbipd-win (once):
+   ```powershell
+   winget install usbipd
+   ```
+
+2. In an **elevated** PowerShell, find the device and attach it:
+   ```powershell
+   usbipd list
+   # Look for "USB JTAG/serial debug unit" or similar
+   usbipd attach --wsl --busid <busid>
+   ```
+
+3. Inside WSL, the device appears as `/dev/ttyACM0` (run `dmesg | tail` to confirm):
+   ```bash
+   pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0
+   ```
+
+   After flashing you can detach the device in PowerShell:
+   ```powershell
+   usbipd detach --busid <busid>
+   ```
 
 ### 2. Provision via captive portal (recommended)
 
@@ -89,7 +124,8 @@ prefer not to enter it on a phone browser.
 
 ### 2a. Provision via serial (alternative)
 
-Connect a serial terminal to the device at **115200 baud** and send commands:
+Connect a serial terminal to the device at **115200 baud** (`/dev/ttyACM0` on Linux/WSL,
+`/dev/cu.usbmodem*` on macOS, `COM<N>` on Windows) and send commands:
 
 ```
 ssid  MyNetwork
@@ -140,7 +176,10 @@ TLS approach, NVS layout, error states.
 
 ## Serial commands
 
-The serial interface (115200 baud) is always available for inspection and re-provisioning:
+The serial interface (115200 baud) is always available for inspection and re-provisioning.
+Connect with any terminal at **115200 8N1** — port is `/dev/ttyACM0` on Linux/WSL,
+`/dev/cu.usbmodem*` on macOS, or `COM<N>` on Windows. WSL users need usbipd attached first
+(see [Flash the firmware](#1-flash-the-firmware)).
 
 | Command | Effect |
 | ------- | ------ |
