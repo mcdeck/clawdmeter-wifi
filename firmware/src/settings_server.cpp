@@ -3,6 +3,16 @@
 #include "hook_event.h"
 #include "clawd_prefs.h"
 #include "clawd_director.h"
+#include "clock_pref.h"
+#include "pace_pref.h"
+#include "button_pref.h"
+#include "theme_pref.h"
+#include "theme_presets.h"
+#include "tz_list.h"
+#include "brightness.h"
+#include "chime_pref.h"
+#include "ui.h"
+#include "wifi_poller.h"
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
@@ -90,6 +100,10 @@ form{margin:0 0 8px}
 
 %CLAWD_SECTION%
 
+%DEVICE_SETTINGS%
+
+%CONNECTION_SECTION%
+
 <script>
 document.getElementById('host').textContent = location.host;
 function gen() {
@@ -163,6 +177,154 @@ static String build_page(const char* banner) {
     );
     html.replace("%CLAWD_SECTION%", clawd);
 
+    // ---- Device settings section ----
+    String ds;
+    ds.reserve(4096);
+    ds += "<section><h2>Device settings</h2>"
+          "<form method=\"POST\" action=\"/save-settings\">";
+
+    // Clock
+    bool clk_on = clock_pref_on();
+    int  clk_fmt = clock_pref_fmt();
+    const char* clk_tz = clock_pref_tz();
+    ds += "<label><input type=\"checkbox\" name=\"clk_on\"";
+    if (clk_on) ds += " checked";
+    ds += "> Show clock (replaces &ldquo;Usage&rdquo; title)</label>";
+    ds += "<div style=\"margin:8px 0\">"
+          "<label style=\"display:inline\"><input type=\"radio\" name=\"clk_fmt\" value=\"24\"";
+    if (clk_fmt != 12) ds += " checked";
+    ds += "> 24-hour</label>&nbsp;&nbsp;"
+          "<label style=\"display:inline\"><input type=\"radio\" name=\"clk_fmt\" value=\"12\"";
+    if (clk_fmt == 12) ds += " checked";
+    ds += "> 12-hour (AM/PM)</label></div>";
+
+    // Timezone select grouped by region (prefix before '/')
+    ds += "<select name=\"clk_tz\" style=\"margin-bottom:16px\">";
+    char cur_region[32] = "";
+    for (int i = 0; i < tz_list_count; i++) {
+        // Extract region (prefix before first '/')
+        const char* slash = strchr(tz_list[i].name, '/');
+        char region[32] = "Other";
+        if (slash) {
+            int len = (int)(slash - tz_list[i].name);
+            if (len < (int)sizeof(region)) {
+                memcpy(region, tz_list[i].name, len);
+                region[len] = '\0';
+            }
+        } else {
+            strlcpy(region, tz_list[i].name, sizeof(region));
+        }
+        if (strcmp(region, cur_region) != 0) {
+            if (cur_region[0]) ds += "</optgroup>";
+            char grp[64];
+            snprintf(grp, sizeof(grp), "<optgroup label=\"%s\">", region);
+            ds += grp;
+            strlcpy(cur_region, region, sizeof(cur_region));
+        }
+        bool sel = strcmp(tz_list[i].posix, clk_tz) == 0;
+        char opt[128];
+        snprintf(opt, sizeof(opt), "<option value=\"%s\"%s>%s</option>",
+                 tz_list[i].posix, sel ? " selected" : "",
+                 slash ? slash + 1 : tz_list[i].name);
+        ds += opt;
+    }
+    if (cur_region[0]) ds += "</optgroup>";
+    ds += "</select>";
+
+    // Pace marker
+    bool pace_on = pace_pref_get();
+    ds += "<label><input type=\"checkbox\" name=\"pace_on\"";
+    if (pace_on) ds += " checked";
+    ds += "> Show pace ticks on usage bars</label>"
+          "<p class=\"note\">Marks how much of the usage window has elapsed.</p>";
+
+    // Buttons
+    static const char* const btn_labels[] = {
+        "None", "Space (voice PTT)", "Shift+Tab (mode toggle)", "Tab", "Enter", "Escape"
+    };
+    static const char* const slot_names[] = {
+        "btn_k1", "btn_k2", "btn_k3"
+    };
+    static const char* const slot_labels[] = {
+        "Primary button", "Secondary button", "PWR button"
+    };
+    for (int s = 0; s < 3; s++) {
+        char sel_buf[256];
+        int cur = (int)button_pref_get((ButtonSlot)s);
+        int pos = 0;
+        pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos,
+                        "<label>%s<select name=\"%s\">",
+                        slot_labels[s], slot_names[s]);
+        for (int v = 0; v <= 5; v++) {
+            pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos,
+                            "<option value=\"%d\"%s>%s</option>",
+                            v, (v == cur) ? " selected" : "", btn_labels[v]);
+        }
+        pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos, "</select></label>");
+        ds += sel_buf;
+    }
+
+    // Theme
+    const char* cur_theme = theme_pref_current_id();
+    ds += "<label>Theme<select name=\"theme_id\">";
+    for (int i = 0; i < theme_preset_count; i++) {
+        char opt[128];
+        snprintf(opt, sizeof(opt), "<option value=\"%s\"%s>%s</option>",
+                 theme_presets[i].id,
+                 strcmp(theme_presets[i].id, cur_theme) == 0 ? " selected" : "",
+                 theme_presets[i].name);
+        ds += opt;
+    }
+    ds += "</select></label>";
+
+    // Brightness
+    int brt = brightness_get();
+    char brt_buf[64];
+    snprintf(brt_buf, sizeof(brt_buf),
+             "<label>Brightness<input type=\"range\" name=\"brt_lvl\" "
+             "min=\"10\" max=\"255\" value=\"%d\"></label>", brt);
+    ds += brt_buf;
+
+    // Reset chime
+    bool chime_on = chime_pref_get();
+    ds += "<label><input type=\"checkbox\" name=\"chime\"";
+    if (chime_on) ds += " checked";
+    ds += "> Reset chime (rings when session window resets)</label>";
+
+    ds += "<br><button type=\"submit\">Save device settings</button>"
+          "</form></section>";
+    html.replace("%DEVICE_SETTINGS%", ds);
+
+    // ---- Connection section ----
+    String cs;
+    cs.reserve(1024);
+    String ssid = provisioning_get_ssid();
+    String token = provisioning_get_token();
+    char tok_disp[48] = "";
+    if (token.length() > 0) {
+        if (token.length() > 20)
+            snprintf(tok_disp, sizeof(tok_disp), "%.20s...", token.c_str());
+        else
+            strlcpy(tok_disp, token.c_str(), sizeof(tok_disp));
+    }
+    bool no_rev = provisioning_no_revert();
+    char conn[768];
+    snprintf(conn, sizeof(conn),
+        "<section><h2>Connection</h2>"
+        "<form method=\"POST\" action=\"/save-connection\">"
+        "<label>SSID<input type=\"text\" name=\"ssid\" value=\"%s\" autocomplete=\"off\"></label>"
+        "<label>Password<input type=\"password\" name=\"pass\" placeholder=\"leave blank to keep current\" autocomplete=\"new-password\"></label>"
+        "<label>Anthropic API Token<input type=\"password\" name=\"token\" value=\"%s\" autocomplete=\"off\"></label>"
+        "<label><input type=\"checkbox\" name=\"safety_revert\"%s>"
+        " Try new credentials for 30 s; revert if connection fails (recommended)</label>"
+        "<p class=\"note\">Changing SSID or password will attempt to reconnect."
+        " If the connection fails within 30 s the previous credentials are restored.</p>"
+        "<button type=\"submit\">Save &amp; Connect</button>"
+        "</form></section>",
+        ssid.c_str(), tok_disp, no_rev ? "" : " checked");
+    cs += conn;
+    html.replace("%CONNECTION_SECTION%", cs);
+
     return html;
 }
 
@@ -190,6 +352,71 @@ static void handle_save_eventtoken(void) {
     provisioning_save_event_token(tok.c_str());
     s_server.sendHeader("Location", "/?saved=1");
     s_server.send(302, "text/plain", "");
+}
+
+static void handle_save_settings(void) {
+    if (!check_web_auth()) return;
+
+    // Clock
+    bool clk_on  = s_server.hasArg("clk_on");
+    int  clk_fmt = s_server.arg("clk_fmt") == "12" ? 12 : 24;
+    String clk_tz = s_server.arg("clk_tz");
+    if (clk_tz.length() == 0) clk_tz = "UTC0";
+    clock_pref_set(clk_on, clk_fmt, clk_tz.c_str());
+
+    // Pace
+    pace_pref_set(s_server.hasArg("pace_on"));
+
+    // Buttons
+    button_pref_set(BTN_SLOT_PRIMARY,   s_server.arg("btn_k1").toInt());
+    button_pref_set(BTN_SLOT_SECONDARY, s_server.arg("btn_k2").toInt());
+    button_pref_set(BTN_SLOT_PWR,       s_server.arg("btn_k3").toInt());
+
+    // Theme
+    String theme_id = s_server.arg("theme_id");
+    if (theme_id.length() > 0) theme_pref_set_by_name(theme_id.c_str());
+
+    // Brightness
+    int brt = s_server.arg("brt_lvl").toInt();
+    if (brt < 10)  brt = 10;
+    if (brt > 255) brt = 255;
+    brightness_set((uint8_t)brt);
+
+    // Chime
+    chime_pref_set(s_server.hasArg("chime"));
+
+    ui_settings_refresh();
+
+    s_server.sendHeader("Location", "/?saved=1");
+    s_server.send(303);
+}
+
+static void handle_save_connection(void) {
+    if (!check_web_auth()) return;
+
+    // Token (save regardless of SSID/pass changes)
+    String token = s_server.arg("token");
+    if (token.length() > 0) {
+        provisioning_save_wifi(provisioning_get_ssid().c_str(),
+                               provisioning_get_pass().c_str(),
+                               token.c_str());
+    }
+
+    String new_ssid = s_server.arg("ssid");
+    String new_pass = s_server.arg("pass");
+    bool safety = s_server.hasArg("safety_revert");
+    provisioning_set_no_revert(!safety);
+
+    if (new_ssid.length() > 0) {
+        // If password is blank, keep the current one
+        if (new_pass.length() == 0) new_pass = provisioning_get_pass();
+        provisioning_save_pending_wifi(new_ssid.c_str(), new_pass.c_str());
+        // Restart the Wi-Fi poller so it picks up the pending credentials
+        wifi_poller_restart();
+    }
+
+    s_server.sendHeader("Location", "/?saved=1");
+    s_server.send(303);
 }
 
 // POST /event  body (URL-encoded): t=p&es=42&n=1&a=2
@@ -242,6 +469,8 @@ void settings_server_init(void) {
             s_server.sendHeader("Location", "/?saved=1");
             s_server.send(303);
         });
+        s_server.on("/save-settings",         HTTP_POST, handle_save_settings);
+        s_server.on("/save-connection",       HTTP_POST, handle_save_connection);
         s_server.on("/event",                 HTTP_POST, handle_event);
         s_server.onNotFound([]() {
             s_server.sendHeader("Location", "/");
