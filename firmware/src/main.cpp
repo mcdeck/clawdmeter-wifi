@@ -22,6 +22,11 @@
 #include "clawd_director.h"
 #include "clawd_prefs.h"
 #include "mascot.h"
+#include "clock_pref.h"
+#include "pace_pref.h"
+#include "button_pref.h"
+#include "button_action.h"
+#include "theme_pref.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -204,6 +209,10 @@ void setup() {
     board_init();
     provisioning_init();
     chime_pref_load();
+    clock_pref_load();
+    pace_pref_load();
+    button_pref_load();
+    theme_pref_load();
 
     display_hal_init();
     display_hal_begin();
@@ -246,6 +255,7 @@ void setup() {
     HEAP_LOG("pre ui_init");
 
     ui_init();
+    ui_set_pace_marker(pace_pref_get());
     clawd_prefs_init();
     director_init();
     HEAP_LOG("post ui_init");
@@ -308,8 +318,12 @@ void loop() {
         bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
         if (primary_now != primary_was) {
             if (primary_now) {
-                if (idle_consume_wake_press()) primary_wake_swallowed = true;
-                else                            ble_keyboard_press(0x2C, 0);  // HID Space, no mods
+                if (idle_consume_wake_press()) {
+                    primary_wake_swallowed = true;
+                } else {
+                    ButtonBinding b = button_action_decode(button_pref_get(BTN_SLOT_PRIMARY));
+                    if (b.kind == BTN_KIND_HID) ble_keyboard_press(b.keycode, b.mods);
+                }
             } else {
                 if (primary_wake_swallowed) primary_wake_swallowed = false;
                 else                        ble_keyboard_release();
@@ -323,8 +337,12 @@ void loop() {
             bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
             if (secondary_now != secondary_was) {
                 if (secondary_now) {
-                    if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    else                            ble_keyboard_press(0x2B, 0x02);  // HID Tab + LEFT_SHIFT
+                    if (idle_consume_wake_press()) {
+                        secondary_wake_swallowed = true;
+                    } else {
+                        ButtonBinding b = button_action_decode(button_pref_get(BTN_SLOT_SECONDARY));
+                        if (b.kind == BTN_KIND_HID) ble_keyboard_press(b.keycode, b.mods);
+                    }
                 } else {
                     if (secondary_wake_swallowed) secondary_wake_swallowed = false;
                     else                          ble_keyboard_release();
@@ -396,6 +414,10 @@ void loop() {
                 ui_show_screen(SCREEN_WIFI);
             }
         }
+    }
+
+    if (provisioning_take_reverted()) {
+        ui_set_wifi_status(UI_STATUS_WARN, "Wi-Fi credentials reverted");
     }
 
     check_serial_cmd();
