@@ -1,0 +1,58 @@
+#pragma once
+#include "theme_palette.h"
+
+struct ThemePreset {
+    const char* id;
+    const char* name;
+    uint32_t colors[TH_COUNT];
+    // colors order: TH_BG, TH_PANEL, TH_TEXT, TH_DIM, TH_ACCENT, TH_GREEN, TH_AMBER, TH_RED, TH_BAR_BG
+};
+
+static const ThemePreset theme_presets[] = {
+    {
+        "dark", "Dark",
+        { 0x000000, 0x1f1f1e, 0xfaf9f5, 0xb0aea5, 0xd97757, 0x788c5d, 0xd97757, 0xc0392b, 0x2a2a28 }
+    },
+    {
+        "light", "Light",
+        { 0xfafafa, 0xf0ede8, 0x1a1a1a, 0x888888, 0xd97757, 0x4a7c59, 0xd97000, 0xc0392b, 0xe0ddd8 }
+    },
+    {
+        "catppuccin_mocha", "Catppuccin Mocha",
+        { 0x1e1e2e, 0x313244, 0xcdd6f4, 0x6c7086, 0xcba6f7, 0xa6e3a1, 0xfab387, 0xf38ba8, 0x45475a }
+    },
+    {
+        "dracula", "Dracula",
+        { 0x282a36, 0x44475a, 0xf8f8f2, 0x6272a4, 0xbd93f9, 0x50fa7b, 0xffb86c, 0xff5555, 0x373a4a }
+    },
+    {
+        "gruvbox", "Gruvbox",
+        { 0x282828, 0x3c3836, 0xebdbb2, 0xa89984, 0xd3869b, 0xb8bb26, 0xfe8019, 0xfb4934, 0x504945 }
+    },
+    {
+        "monokai", "Monokai",
+        { 0x272822, 0x3e3d32, 0xf8f8f2, 0x75715e, 0xae81ff, 0xa6e22e, 0xfd971f, 0xf92672, 0x49483e }
+    },
+    {
+        "nord", "Nord",
+        { 0x2e3440, 0x3b4252, 0xeceff4, 0x4c566a, 0x88c0d0, 0xa3be8c, 0xebcb8b, 0xbf616a, 0x434c5e }
+    },
+    {
+        "one_dark", "One Dark",
+        { 0x282c34, 0x353b45, 0xabb2bf, 0x5c6370, 0xc678dd, 0x98c379, 0xe5c07b, 0xe06c75, 0x3e4452 }
+    },
+    {
+        "solarized_dark", "Solarized Dark",
+        { 0x002b36, 0x073642, 0x839496, 0x586e75, 0x268bd2, 0x859900, 0xcb4b16, 0xdc322f, 0x003847 }
+    },
+    {
+        "solarized_light", "Solarized Light",
+        { 0xfdf6e3, 0xeee8d5, 0x657b83, 0x93a1a1, 0x268bd2, 0x859900, 0xcb4b16, 0xdc322f, 0xe8e1ca }
+    },
+    {
+        "tokyo_night", "Tokyo Night",
+        { 0x1a1b26, 0x24283b, 0xc0caf5, 0x565f89, 0x7aa2f7, 0x9ece6a, 0xe0af68, 0xf7768e, 0x292e42 }
+    },
+};
+
+static constexpr int theme_preset_count = (int)(sizeof(theme_presets) / sizeof(theme_presets[0]));
