@@ -40,6 +40,18 @@ void ui_set_nav_locked(bool locked);
 // `chime on|off` over serial).
 void ui_settings_refresh(void);
 
+// Reset the cached-minute counter so the clock title updates on the next tick.
+// Call after changing clock preferences.
+void ui_clock_invalidate(void);
+
+// Show or hide the pace-marker ticks on the usage bars. Applies immediately
+// using the last received usage data.
+void ui_set_pace_marker(bool on);
+
+// Re-apply all LVGL style properties from the live theme palette to every
+// persistent object on every screen. Call after theme_palette_set().
+void ui_repaint_theme(void);
+
 // Director bridge — implemented in ui.cpp; extern'd by clawd_director.cpp
 lv_obj_t* ui_mascot_parent(void);         // SCREEN_USAGE root container
 bool      ui_meters_live(void);           // true when SCREEN_USAGE active + data valid

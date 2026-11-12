@@ -10,6 +10,10 @@
 #include "hal/board_caps.h"
 #include "provisioning.h"
 #include "clawd_director.h"
+#include "clock_pref.h"
+#include "pace_pref.h"
+#include "pace.h"
+#include <time.h>
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
 LV_FONT_DECLARE(font_tiempos_56);
@@ -171,6 +175,34 @@ static lv_obj_t* lbl_wifi_pass_val;
 static lv_obj_t* lbl_wifi_token_val;
 static lv_obj_t* lbl_wifi_note;
 static lv_obj_t* lbl_wifi_btn;
+
+// ---- Extra themed objects (needed for ui_repaint_theme) ----
+static lv_obj_t* usage_title_lbl;         // "Usage" / clock — same as lbl_title
+static lv_obj_t* settings_title_lbl;
+static lv_obj_t* settings_brt_panel;
+static lv_obj_t* settings_brt_lbl;
+static lv_obj_t* settings_chime_panel;
+static lv_obj_t* settings_chime_lbl;
+static lv_obj_t* settings_chime_desc_lbl;
+static lv_obj_t* ble_title_lbl;
+static lv_obj_t* ble_info_panel;
+static lv_obj_t* ble_reset_zone;
+static lv_obj_t* ble_reset_lbl;
+static lv_obj_t* ble_credit_lbl1;
+static lv_obj_t* ble_credit_lbl2;
+static lv_obj_t* wifi_title_lbl;
+static lv_obj_t* wifi_info_panel;
+static lv_obj_t* wifi_btn_zone;
+static lv_obj_t* wifi_key_lbl[3];   // SSID / Pass / Token dim labels
+
+// ---- Pace marker ticks ----
+static lv_obj_t* pace_tick_session = nullptr;
+static lv_obj_t* pace_tick_weekly  = nullptr;
+
+// ---- Clock & pace state ----
+static int       s_clock_last_min = -1;  // -1 = force redraw; -2 = "Usage" showing
+static bool      s_pace_on = false;
+static UsageData s_last_usage = {};
 
 // ---- Battery indicator (shared, on top) ----
 static lv_obj_t* battery_img;
@@ -373,6 +405,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_add_event_cb(usage_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lbl_title = lv_label_create(usage_container);
+    usage_title_lbl = lbl_title;
     lv_label_set_text(lbl_title, "Usage");
     lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
@@ -421,6 +454,27 @@ static void init_usage_screen(lv_obj_t* scr) {
     // Recolor enabled so the enterprise period box can color pace and reset
     // date separately in one label.
     lv_label_set_recolor(lbl_weekly_reset, true);
+
+    // Pace marker ticks — created hidden; repositioned by ui_update when pace is on.
+    pace_tick_session = lv_obj_create(panel_session);
+    lv_obj_set_size(pace_tick_session, 2, 24);
+    lv_obj_set_pos(pace_tick_session, 0, L.usage_bar_y);
+    lv_obj_set_style_bg_color(pace_tick_session, COL_DIM, 0);
+    lv_obj_set_style_bg_opa(pace_tick_session, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pace_tick_session, 0, 0);
+    lv_obj_set_style_pad_all(pace_tick_session, 0, 0);
+    lv_obj_set_style_radius(pace_tick_session, 0, 0);
+    lv_obj_set_hidden(pace_tick_session, true);
+
+    pace_tick_weekly = lv_obj_create(panel_weekly);
+    lv_obj_set_size(pace_tick_weekly, 2, 24);
+    lv_obj_set_pos(pace_tick_weekly, 0, L.usage_bar_y);
+    lv_obj_set_style_bg_color(pace_tick_weekly, COL_DIM, 0);
+    lv_obj_set_style_bg_opa(pace_tick_weekly, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pace_tick_weekly, 0, 0);
+    lv_obj_set_style_pad_all(pace_tick_weekly, 0, 0);
+    lv_obj_set_style_radius(pace_tick_weekly, 0, 0);
+    lv_obj_set_hidden(pace_tick_weekly, true);
 
     // Stale/Zzz view — a shrunk sleeping creature (claudepix "expression
     // sleep") centered where the panels normally sit. Hidden by default.
@@ -485,6 +539,7 @@ static void init_settings_screen(lv_obj_t* scr) {
     lv_obj_add_event_cb(settings_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t* title = lv_label_create(settings_container);
+    settings_title_lbl = title;
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_font(title, &font_tiempos_56, 0);
     lv_obj_set_style_text_color(title, COL_TEXT, 0);
@@ -494,9 +549,11 @@ static void init_settings_screen(lv_obj_t* scr) {
     // inside the panel must not cycle the screen mid-adjustment.
     lv_obj_t* p1 = make_panel(settings_container, L.margin, L.content_y,
                               L.content_w, L.usage_panel_h);
+    settings_brt_panel = p1;
     lv_obj_set_event_bubble(p1, false);
 
     lv_obj_t* lbl_b = lv_label_create(p1);
+    settings_brt_lbl = lbl_b;
     lv_label_set_text(lbl_b, "Brightness");
     lv_obj_set_style_text_font(lbl_b, &font_styrene_28, 0);
     lv_obj_set_style_text_color(lbl_b, COL_TEXT, 0);
@@ -527,16 +584,19 @@ static void init_settings_screen(lv_obj_t* scr) {
     lv_obj_t* p2 = make_panel(settings_container, L.margin,
                               L.content_y + L.usage_panel_h + L.usage_panel_gap,
                               L.content_w, L.usage_panel_h);
+    settings_chime_panel = p2;
     lv_obj_set_event_bubble(p2, false);
 
     // Top-aligned to mirror the brightness panel's layout.
     lv_obj_t* lbl_c = lv_label_create(p2);
+    settings_chime_lbl = lbl_c;
     lv_label_set_text(lbl_c, "Reset chime");
     lv_obj_set_style_text_font(lbl_c, &font_styrene_28, 0);
     lv_obj_set_style_text_color(lbl_c, COL_TEXT, 0);
     lv_obj_set_pos(lbl_c, 0, 0);
 
     lv_obj_t* lbl_c2 = lv_label_create(p2);
+    settings_chime_desc_lbl = lbl_c2;
     lv_label_set_text(lbl_c2, "Rings when your session resets");
     lv_obj_set_style_text_font(lbl_c2, &font_styrene_16, 0);
     lv_obj_set_style_text_color(lbl_c2, COL_DIM, 0);
@@ -604,6 +664,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_add_event_cb(wifi_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t* lbl_title = lv_label_create(wifi_container);
+    wifi_title_lbl = lbl_title;
     lv_label_set_text(lbl_title, "Wi-Fi");
     lv_obj_set_style_text_font(lbl_title, L.bt_title_font, 0);
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
@@ -611,10 +672,12 @@ static void init_wifi_screen(lv_obj_t* scr) {
 
     lv_obj_t* p = make_panel(wifi_container, L.margin, L.content_y,
                              L.content_w, L.wifi_panel_h);
+    wifi_info_panel = p;
 
     static const char* const keys[] = { "SSID", "Pass", "Token" };
     for (int i = 0; i < 3; i++) {
         lv_obj_t* k = lv_label_create(p);
+        wifi_key_lbl[i] = k;
         lv_label_set_text(k, keys[i]);
         lv_obj_set_style_text_font(k, L.bt_device_font, 0);
         lv_obj_set_style_text_color(k, COL_DIM, 0);
@@ -638,6 +701,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_set_flex_flow(btn_zone, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_zone, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollable(btn_zone, false);
+    wifi_btn_zone = btn_zone;
     lv_obj_add_event_cb(btn_zone, wifi_hotspot_click_cb, LV_EVENT_CLICKED, NULL);
 
     lbl_wifi_btn = lv_label_create(btn_zone);
@@ -670,6 +734,7 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_obj_add_event_cb(ble_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t* lbl_ble_title = lv_label_create(ble_container);
+    ble_title_lbl = lbl_ble_title;
     lv_label_set_text(lbl_ble_title, "Bluetooth");
     lv_obj_set_style_text_font(lbl_ble_title, L.bt_title_font, 0);
     lv_obj_set_style_text_color(lbl_ble_title, COL_TEXT, 0);
@@ -677,6 +742,7 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
     lv_obj_t* p_info = make_panel(ble_container, L.margin, L.content_y,
                                   L.content_w, L.bt_info_panel_h);
+    ble_info_panel = p_info;
 
     static lv_image_dsc_t icon_bt_dsc;
     init_icon_dsc(&icon_bt_dsc, ICON_BLUETOOTH_W, ICON_BLUETOOTH_H, icon_bluetooth_data);
@@ -715,6 +781,7 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_obj_set_flex_flow(reset_zone, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(reset_zone, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollable(reset_zone, false);
+    ble_reset_zone = reset_zone;
     lv_obj_add_event_cb(reset_zone, ble_reset_click_cb, LV_EVENT_CLICKED, NULL);
 
     static lv_image_dsc_t icon_trash_dsc;
@@ -723,17 +790,20 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_image_set_src(trash_img, &icon_trash_dsc);
 
     lv_obj_t* reset_lbl = lv_label_create(reset_zone);
+    ble_reset_lbl = reset_lbl;
     lv_label_set_text(reset_lbl, "Reset Bluetooth");
     lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
     lv_obj_set_style_text_color(reset_lbl, COL_DIM, 0);
 
     lv_obj_t* lbl_credit = lv_label_create(ble_container);
+    ble_credit_lbl1 = lbl_credit;
     lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
     lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
     lv_obj_set_style_text_color(lbl_credit, COL_DIM, 0);
     lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
 
     lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
+    ble_credit_lbl2 = lbl_credit2;
     lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
     lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
     lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
@@ -788,6 +858,7 @@ static void style_binding_pill(lv_obj_t* pill, bool binding) {
 
 void ui_update(const UsageData* data) {
     if (!data->valid) return;
+    s_last_usage  = *data;
     last_data_ms  = lv_tick_get();   // a valid usage update just landed
     data_received = true;
 
@@ -866,6 +937,33 @@ void ui_update(const UsageData* data) {
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     }
+
+    // Pace marker ticks: reposition and colorize when pace is on (non-enterprise only).
+    if (s_pace_on && !data->enterprise && pace_tick_session && pace_tick_weekly) {
+        int bar_w = lv_obj_get_width(bar_session);
+        if (data->has_session && data->session_reset_mins >= 0) {
+            float ep = pace_elapsed_pct(data->session_reset_mins, 300);
+            int tx = (int)(ep / 100.0f * bar_w) - 1;
+            if (tx < 0) tx = 0;
+            lv_obj_set_x(pace_tick_session, tx);
+            lv_obj_set_hidden(pace_tick_session, false);
+            int lvl = pace_level(data->session_pct, ep);
+            lv_obj_set_style_bg_color(bar_session,
+                lvl == 0 ? COL_GREEN : lvl == 1 ? COL_AMBER : COL_RED,
+                LV_PART_INDICATOR);
+        }
+        if (data->weekly_reset_mins >= 0) {
+            float ep = pace_elapsed_pct(data->weekly_reset_mins, 10080);
+            int tx = (int)(ep / 100.0f * bar_w) - 1;
+            if (tx < 0) tx = 0;
+            lv_obj_set_x(pace_tick_weekly, tx);
+            lv_obj_set_hidden(pace_tick_weekly, false);
+            int lvl = pace_level(data->weekly_pct, ep);
+            lv_obj_set_style_bg_color(bar_weekly,
+                lvl == 0 ? COL_GREEN : lvl == 1 ? COL_AMBER : COL_RED,
+                LV_PART_INDICATOR);
+        }
+    }
 }
 
 // Swap panels <-> stale Zzz view based on data freshness. Only re-lays-out on
@@ -886,6 +984,31 @@ void ui_tick_anim(void) {
     if (current_screen != SCREEN_USAGE) return;
     update_stale_view();
     if (showing_stale) splash_mini_tick();  // animate the sleeping creature
+
+    // Clock: update lbl_title once per minute when clock is on and NTP is synced.
+    if (clock_pref_on() && time(nullptr) > 1000000000L) {
+        time_t tnow = time(nullptr);
+        struct tm t;
+        localtime_r(&tnow, &t);
+        if (t.tm_min != s_clock_last_min) {
+            s_clock_last_min = t.tm_min;
+            char cbuf[16];
+            if (clock_pref_fmt() == 12) {
+                int h = t.tm_hour % 12; if (!h) h = 12;
+                snprintf(cbuf, sizeof(cbuf), "%d:%02d %s", h, t.tm_min,
+                         t.tm_hour < 12 ? "AM" : "PM");
+            } else {
+                snprintf(cbuf, sizeof(cbuf), "%d:%02d", t.tm_hour, t.tm_min);
+            }
+            lv_label_set_text(lbl_title, cbuf);
+        }
+    } else if (!clock_pref_on()) {
+        if (s_clock_last_min != -2) {
+            s_clock_last_min = -2;
+            lv_label_set_text(lbl_title, "Usage");
+        }
+    }
+
     if (lv_obj_is_hidden(lbl_anim)) return;
 
     uint32_t now = lv_tick_get();
@@ -1235,4 +1358,93 @@ void ui_set_alert_text(const char* msg) {
         // Restore the last Wi-Fi status now that the alert is gone.
         ui_set_status(s_wifi_level, s_wifi_msg[0] ? s_wifi_msg : nullptr);
     }
+}
+
+// ======== Clock / Pace / Theme public API ========
+
+void ui_clock_invalidate(void) {
+    s_clock_last_min = -1;  // force redraw on next tick
+}
+
+void ui_set_pace_marker(bool on) {
+    s_pace_on = on;
+    if (pace_tick_session) lv_obj_set_hidden(pace_tick_session, !on);
+    if (pace_tick_weekly)  lv_obj_set_hidden(pace_tick_weekly,  !on);
+    if (on && s_last_usage.valid) ui_update(&s_last_usage);
+}
+
+void ui_repaint_theme(void) {
+    lv_obj_set_style_bg_color(lv_screen_active(), COL_BG, 0);
+
+    // Usage screen
+    if (usage_title_lbl) lv_obj_set_style_text_color(usage_title_lbl, COL_TEXT, 0);
+    if (panel_session) {
+        lv_obj_set_style_bg_color(panel_session, COL_PANEL, 0);
+        lv_obj_set_style_bg_color(bar_session, COL_BAR_BG, LV_PART_MAIN);
+        if (!s_pace_on)
+            lv_obj_set_style_bg_color(bar_session, COL_GREEN, LV_PART_INDICATOR);
+        lv_obj_set_style_text_color(lbl_session_pct, COL_TEXT, 0);
+        lv_obj_set_style_text_color(lbl_session_label, COL_TEXT, 0);
+        lv_obj_set_style_bg_color(lbl_session_label, COL_BAR_BG, 0);
+        lv_obj_set_style_text_color(lbl_session_reset, COL_DIM, 0);
+    }
+    if (panel_weekly) {
+        lv_obj_set_style_bg_color(panel_weekly, COL_PANEL, 0);
+        lv_obj_set_style_bg_color(bar_weekly, COL_BAR_BG, LV_PART_MAIN);
+        if (!s_pace_on)
+            lv_obj_set_style_bg_color(bar_weekly, COL_GREEN, LV_PART_INDICATOR);
+        lv_obj_set_style_text_color(lbl_weekly_pct, COL_TEXT, 0);
+        lv_obj_set_style_text_color(lbl_weekly_label, COL_TEXT, 0);
+        lv_obj_set_style_bg_color(lbl_weekly_label, COL_BAR_BG, 0);
+        lv_obj_set_style_text_color(lbl_weekly_reset, COL_DIM, 0);
+    }
+    if (lbl_anim)   lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
+    if (lbl_status) lv_obj_set_style_text_color(lbl_status, COL_DIM, 0);
+    if (pace_tick_session) lv_obj_set_style_bg_color(pace_tick_session, COL_DIM, 0);
+    if (pace_tick_weekly)  lv_obj_set_style_bg_color(pace_tick_weekly,  COL_DIM, 0);
+
+    // Settings screen
+    if (settings_title_lbl) lv_obj_set_style_text_color(settings_title_lbl, COL_TEXT, 0);
+    if (settings_brt_panel) {
+        lv_obj_set_style_bg_color(settings_brt_panel, COL_PANEL, 0);
+        lv_obj_set_style_bg_color(settings_slider, COL_BAR_BG, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(settings_slider, COL_ACCENT, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(settings_slider, COL_TEXT,   LV_PART_KNOB);
+    }
+    if (settings_brt_lbl)      lv_obj_set_style_text_color(settings_brt_lbl, COL_TEXT, 0);
+    if (lbl_brt_val)           lv_obj_set_style_text_color(lbl_brt_val, COL_DIM, 0);
+    if (settings_chime_panel) {
+        lv_obj_set_style_bg_color(settings_chime_panel, COL_PANEL, 0);
+        lv_obj_set_style_bg_color(chime_switch, COL_BAR_BG, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(chime_switch, COL_ACCENT,
+                                  (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
+        lv_obj_set_style_bg_color(chime_switch, COL_TEXT, LV_PART_KNOB);
+    }
+    if (settings_chime_lbl)      lv_obj_set_style_text_color(settings_chime_lbl, COL_TEXT, 0);
+    if (settings_chime_desc_lbl) lv_obj_set_style_text_color(settings_chime_desc_lbl, COL_DIM, 0);
+
+    // Bluetooth screen
+    if (ble_title_lbl)  lv_obj_set_style_text_color(ble_title_lbl, COL_TEXT, 0);
+    if (ble_info_panel) lv_obj_set_style_bg_color(ble_info_panel, COL_PANEL, 0);
+    if (lbl_ble_status) lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
+    if (lbl_ble_device) lv_obj_set_style_text_color(lbl_ble_device, COL_DIM, 0);
+    if (lbl_ble_mac)    lv_obj_set_style_text_color(lbl_ble_mac,    COL_DIM, 0);
+    if (ble_reset_zone) lv_obj_set_style_bg_color(ble_reset_zone, COL_PANEL, 0);
+    if (ble_reset_lbl)  lv_obj_set_style_text_color(ble_reset_lbl,   COL_DIM, 0);
+    if (ble_credit_lbl1) lv_obj_set_style_text_color(ble_credit_lbl1, COL_DIM, 0);
+    if (ble_credit_lbl2) lv_obj_set_style_text_color(ble_credit_lbl2, COL_DIM, 0);
+
+    // Wi-Fi screen
+    if (wifi_title_lbl)  lv_obj_set_style_text_color(wifi_title_lbl, COL_TEXT, 0);
+    if (wifi_info_panel) lv_obj_set_style_bg_color(wifi_info_panel, COL_PANEL, 0);
+    for (int i = 0; i < 3; i++)
+        if (wifi_key_lbl[i]) lv_obj_set_style_text_color(wifi_key_lbl[i], COL_DIM, 0);
+    if (lbl_wifi_ssid_val)  lv_obj_set_style_text_color(lbl_wifi_ssid_val,  COL_TEXT, 0);
+    if (lbl_wifi_pass_val)  lv_obj_set_style_text_color(lbl_wifi_pass_val,  COL_TEXT, 0);
+    if (lbl_wifi_token_val) lv_obj_set_style_text_color(lbl_wifi_token_val, COL_TEXT, 0);
+    if (wifi_btn_zone)  lv_obj_set_style_bg_color(wifi_btn_zone, COL_PANEL, 0);
+    if (lbl_wifi_btn)   lv_obj_set_style_text_color(lbl_wifi_btn,  COL_AMBER, 0);
+    if (lbl_wifi_note)  lv_obj_set_style_text_color(lbl_wifi_note, COL_DIM,   0);
+
+    lv_obj_invalidate(lv_screen_active());
 }
