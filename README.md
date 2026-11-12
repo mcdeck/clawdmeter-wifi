@@ -157,6 +157,94 @@ Space and Shift+Tab are standard BLE HID keyboard reports — they trigger in wh
 has focus on the paired host, not just Claude Code. BLE pairing is separate from Wi-Fi and
 optional; the usage display works without it.
 
+## Claude Code hook integration (live reactions)
+
+Clawdmeter can react to Claude Code activity in real time: Clawd waves and
+points from his corner when you start a prompt, and calms down when the turn
+ends. This uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks)
+to POST a small event to the device over your local network.
+
+### 1. Find the device address
+
+The device registers as **clawdmeter.local** via mDNS once connected to Wi-Fi.
+Test it:
+
+```bash
+curl -s http://clawdmeter.local/event -X POST -d "t=p"
+# → HTTP 204 No Content (success) or 401 Unauthorized
+```
+
+If mDNS doesn't work on your network, use the device's IP address instead
+(visible on the Wi-Fi screen, or check your router's DHCP table).
+
+### 2. Set an event token (optional but recommended)
+
+The `POST /event` endpoint accepts unauthenticated requests by default (fine on a
+home LAN). To require a secret:
+
+1. Open **http://clawdmeter.local** in a browser.
+2. Under **Hook event token**, enter any string and save.
+3. Add `Authorization: Bearer <token>` to your hook's `curl` call (see below).
+
+### 3. Add hooks to Claude Code
+
+Add the following to your Claude Code settings file. The recommended location is
+`~/.claude/settings.json` (applies to all projects) or `.claude/settings.json` in
+a specific project.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sf http://clawdmeter.local/event -X POST -d 't=p' -o /dev/null"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sf http://clawdmeter.local/event -X POST -d 't=s' -o /dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If you set an event token, add `-H "Authorization: Bearer <token>"` to each `curl` call.
+
+### Event types
+
+| `t=` | Trigger | Clawd's reaction |
+|------|---------|-----------------|
+| `p`  | Prompt started (PreToolUse) | Waves and points from his corner |
+| `s`  | Turn ended (Stop) | Calms down, returns to idle |
+| `b`  | Back after a gap (optional) | Subtle notice animation |
+
+The `es` (sequence), `n` (session count), and `a` (activity level 0–3) parameters are
+optional and can be omitted for simple integrations.
+
+### Tuning reactivity
+
+On **http://clawdmeter.local**, the **Clawd** section controls:
+
+- **Liveliness** (1–5) — how often Clawd does idle acts and reacts to events;
+  level 1 sits still and ignores events entirely.
+- **Attention animation** — how long the wave/point runs before Clawd returns to
+  his seat (120 s / 30 s / 10 s / Off).
+
+---
+
 ## How it works
 
 1. On boot the device reads Wi-Fi credentials and an Anthropic OAuth token from NVS
