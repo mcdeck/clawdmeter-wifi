@@ -1,6 +1,7 @@
 #include "settings_server.h"
 #include "provisioning.h"
 #include "hook_event.h"
+#include "clawd_prefs.h"
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
@@ -30,6 +31,8 @@ label{display:block;font-size:.85em;color:#888;margin-bottom:4px}
 .info.dim{color:#555}
 input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #444;
      border-radius:6px;background:#252525;color:#e8e0d4;font-size:1em}
+select{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #444;
+       border-radius:6px;background:#252525;color:#e8e0d4;font-size:1em;margin-bottom:12px}
 .row{display:flex;gap:8px;align-items:stretch;margin-bottom:4px}
 .row input{margin:0;flex:1;min-width:0}
 button{padding:10px 18px;background:#d97757;border:none;border-radius:6px;
@@ -84,6 +87,8 @@ form{margin:0 0 8px}
   </p>
 </form>
 
+%CLAWD_SECTION%
+
 <script>
 document.getElementById('host').textContent = location.host;
 function gen() {
@@ -124,6 +129,39 @@ static String build_page(const char* banner) {
     html.replace("%WEB_PASS_CLASS%",  has_pass ? "ok"  : "dim");
     html.replace("%WEB_PASS_STATUS%", has_pass ? "Currently protected" : "Currently no password");
     html.replace("%EVENT_TOKEN%", provisioning_get_event_token());
+
+    // Build Clawd section with live NVS values pre-selected
+    int lv   = liveliness_get();
+    int attn = clawd_attn_anim();
+    char clawd[2048];
+    snprintf(clawd, sizeof(clawd),
+        "<section>"
+        "<h2>Clawd</h2>"
+        "<form method=\"post\" action=\"/settings/clawd\">"
+        "<label>Liveliness<br>"
+        "<select name=\"liveliness\">"
+        "<option value=\"1\"%s>1 &mdash; No-nonsense</option>"
+        "<option value=\"2\"%s>2 &mdash; Mostly quiet</option>"
+        "<option value=\"3\"%s>3 &mdash; Some nonsense (default)</option>"
+        "<option value=\"4\"%s>4 &mdash; Lively</option>"
+        "<option value=\"5\"%s>5 &mdash; All-nonsense</option>"
+        "</select></label>"
+        "<label>Attention animation<br>"
+        "<select name=\"attn_anim\">"
+        "<option value=\"120\"%s>120 s (default)</option>"
+        "<option value=\"30\"%s>30 s</option>"
+        "<option value=\"10\"%s>10 s</option>"
+        "<option value=\"0\"%s>Off</option>"
+        "</select></label>"
+        "<button type=\"submit\">Save Clawd settings</button>"
+        "</form></section>",
+        lv==1?" selected":"", lv==2?" selected":"", lv==3?" selected":"",
+        lv==4?" selected":"", lv==5?" selected":"",
+        attn==120?" selected":"", attn==30?" selected":"",
+        attn==10?" selected":"", attn==0?" selected":""
+    );
+    html.replace("%CLAWD_SECTION%", clawd);
+
     return html;
 }
 
@@ -193,6 +231,15 @@ void settings_server_init(void) {
         s_server.on("/",                      HTTP_GET,  handle_root);
         s_server.on("/settings/webpass",      HTTP_POST, handle_save_webpass);
         s_server.on("/settings/eventtoken",   HTTP_POST, handle_save_eventtoken);
+        s_server.on("/settings/clawd",        HTTP_POST, []() {
+            if (!check_web_auth()) return;
+            int lv   = s_server.arg("liveliness").toInt();
+            int attn = s_server.arg("attn_anim").toInt();
+            liveliness_set(lv);
+            attn_anim_set(attn);
+            s_server.sendHeader("Location", "/?saved=1");
+            s_server.send(303);
+        });
         s_server.on("/event",                 HTTP_POST, handle_event);
         s_server.onNotFound([]() {
             s_server.sendHeader("Location", "/");
