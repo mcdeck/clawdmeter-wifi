@@ -21,12 +21,12 @@ static const TzEntry tz_list[] = {
     { "Pacific/Honolulu",       "HST10" },
     { "America/Toronto",        "EST5EDT,M3.2.0,M11.1.0" },
     { "America/Vancouver",      "PST8PDT,M3.2.0,M11.1.0" },
-    { "America/Sao_Paulo",      "BRT3BRST,M10.3.0/0,M2.3.0/0" },
+    { "America/Sao_Paulo",      "<-03>3" },
     { "America/Buenos_Aires",   "ART3" },
     { "America/Bogota",         "COT5" },
     { "America/Lima",           "PET5" },
     { "America/Santiago",       "CLT4CLST,M10.2.6/24,M3.2.6/24" },
-    { "America/Mexico_City",    "CST6CDT,M4.1.0,M10.5.0" },
+    { "America/Mexico_City",    "CST6" },
     { "America/Caracas",        "VET4" },
 
     // Europe

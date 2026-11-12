@@ -209,8 +209,12 @@ void provisioning_get_trial_creds(String& ssid_out, String& pass_out) {
     if (s_ssid_new.length() > 0) {
         ssid_out = s_ssid_new;
         pass_out = s_pass_new;
-        s_trial_start  = millis();
-        s_trial_active = true;
+        // Start the 30 s clock only on the first call; retries must not
+        // reset it, or the timeout can never expire across connect cycles.
+        if (!s_trial_active) {
+            s_trial_start  = millis();
+            s_trial_active = true;
+        }
     } else {
         ssid_out = s_ssid;
         pass_out = s_pass;

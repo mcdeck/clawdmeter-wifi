@@ -353,6 +353,11 @@ void loop() {
 
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
+                ButtonBinding pb = button_action_decode(button_pref_get(BTN_SLOT_PWR));
+                if (pb.kind == BTN_KIND_HID) {
+                    ble_keyboard_press(pb.keycode, pb.mods);
+                    ble_keyboard_release();
+                }
                 if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
                 else if (!director_button(true))              ui_cycle_screen();
             }

@@ -20,6 +20,7 @@
 
 static WebServer s_server(80);
 static bool      s_running = false;
+static bool      s_restart_pending = false;
 
 // ---- HTML template -------------------------------------------------------
 
@@ -249,19 +250,22 @@ static String build_page(const char* banner) {
         "Primary button", "Secondary button", "PWR button"
     };
     for (int s = 0; s < 3; s++) {
-        char sel_buf[256];
         int cur = (int)button_pref_get((ButtonSlot)s);
-        int pos = 0;
-        pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos,
-                        "<label>%s<select name=\"%s\">",
-                        slot_labels[s], slot_names[s]);
+        ds += "<label>";
+        ds += slot_labels[s];
+        ds += "<select name=\"";
+        ds += slot_names[s];
+        ds += "\">";
         for (int v = 0; v <= 5; v++) {
-            pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos,
-                            "<option value=\"%d\"%s>%s</option>",
-                            v, (v == cur) ? " selected" : "", btn_labels[v]);
+            ds += "<option value=\"";
+            ds += v;
+            ds += "\"";
+            if (v == cur) ds += " selected";
+            ds += ">";
+            ds += btn_labels[v];
+            ds += "</option>";
         }
-        pos += snprintf(sel_buf + pos, sizeof(sel_buf) - pos, "</select></label>");
-        ds += sel_buf;
+        ds += "</select></label>";
     }
 
     // Theme
@@ -279,7 +283,7 @@ static String build_page(const char* banner) {
 
     // Brightness
     int brt = brightness_get();
-    char brt_buf[64];
+    char brt_buf[128];
     snprintf(brt_buf, sizeof(brt_buf),
              "<label>Brightness<input type=\"range\" name=\"brt_lvl\" "
              "min=\"10\" max=\"255\" value=\"%d\"></label>", brt);
@@ -296,33 +300,28 @@ static String build_page(const char* banner) {
     html.replace("%DEVICE_SETTINGS%", ds);
 
     // ---- Connection section ----
+    // Token and SSID are never pre-filled: a truncated or partial value
+    // submitted back would silently overwrite the real credential in NVS.
+    String ssid = provisioning_get_ssid();
+    bool   has_token = provisioning_get_token().length() > 0;
+    bool   no_rev = provisioning_no_revert();
     String cs;
     cs.reserve(1024);
-    String ssid = provisioning_get_ssid();
-    String token = provisioning_get_token();
-    char tok_disp[48] = "";
-    if (token.length() > 0) {
-        if (token.length() > 20)
-            snprintf(tok_disp, sizeof(tok_disp), "%.20s...", token.c_str());
-        else
-            strlcpy(tok_disp, token.c_str(), sizeof(tok_disp));
-    }
-    bool no_rev = provisioning_no_revert();
-    char conn[768];
-    snprintf(conn, sizeof(conn),
-        "<section><h2>Connection</h2>"
-        "<form method=\"POST\" action=\"/save-connection\">"
-        "<label>SSID<input type=\"text\" name=\"ssid\" value=\"%s\" autocomplete=\"off\"></label>"
-        "<label>Password<input type=\"password\" name=\"pass\" placeholder=\"leave blank to keep current\" autocomplete=\"new-password\"></label>"
-        "<label>Anthropic API Token<input type=\"password\" name=\"token\" value=\"%s\" autocomplete=\"off\"></label>"
-        "<label><input type=\"checkbox\" name=\"safety_revert\"%s>"
-        " Try new credentials for 30 s; revert if connection fails (recommended)</label>"
-        "<p class=\"note\">Changing SSID or password will attempt to reconnect."
-        " If the connection fails within 30 s the previous credentials are restored.</p>"
-        "<button type=\"submit\">Save &amp; Connect</button>"
-        "</form></section>",
-        ssid.c_str(), tok_disp, no_rev ? "" : " checked");
-    cs += conn;
+    cs += "<section><h2>Connection</h2>"
+          "<form method=\"POST\" action=\"/save-connection\">"
+          "<label>SSID<input type=\"text\" name=\"ssid\" placeholder=\"";
+    cs += ssid.length() ? ssid : "(not configured)";
+    cs += "\" autocomplete=\"off\"></label>"
+          "<label>Password<input type=\"password\" name=\"pass\" placeholder=\"leave blank to keep\" autocomplete=\"new-password\"></label>"
+          "<label>Anthropic API Token<input type=\"password\" name=\"token\" placeholder=\"";
+    cs += has_token ? "set \xe2\x80\x94 leave blank to keep" : "(not set)";
+    cs += "\" autocomplete=\"off\"></label>"
+          "<label><input type=\"checkbox\" name=\"safety_revert\"";
+    if (!no_rev) cs += " checked";
+    cs += "> Try new credentials for 30 s; revert if connection fails (recommended)</label>"
+          "<p class=\"note\">Leave SSID and password blank to update the token only.</p>"
+          "<button type=\"submit\">Save &amp; Connect</button>"
+          "</form></section>";
     html.replace("%CONNECTION_SECTION%", cs);
 
     return html;
@@ -394,7 +393,8 @@ static void handle_save_settings(void) {
 static void handle_save_connection(void) {
     if (!check_web_auth()) return;
 
-    // Token (save regardless of SSID/pass changes)
+    // Token: only save if the user typed something (never pre-filled, so
+    // a non-empty value is always a real new token from the user).
     String token = s_server.arg("token");
     if (token.length() > 0) {
         provisioning_save_wifi(provisioning_get_ssid().c_str(),
@@ -407,12 +407,17 @@ static void handle_save_connection(void) {
     bool safety = s_server.hasArg("safety_revert");
     provisioning_set_no_revert(!safety);
 
-    if (new_ssid.length() > 0) {
-        // If password is blank, keep the current one
+    // Only attempt a reconnect if at least one credential field was provided
+    // AND the resulting credentials differ from what is already stored.
+    if (new_ssid.length() > 0 || new_pass.length() > 0) {
+        if (new_ssid.length() == 0) new_ssid = provisioning_get_ssid();
         if (new_pass.length() == 0) new_pass = provisioning_get_pass();
-        provisioning_save_pending_wifi(new_ssid.c_str(), new_pass.c_str());
-        // Restart the Wi-Fi poller so it picks up the pending credentials
-        wifi_poller_restart();
+        if (new_ssid != provisioning_get_ssid() || new_pass != provisioning_get_pass()) {
+            provisioning_save_pending_wifi(new_ssid.c_str(), new_pass.c_str());
+            // Defer restart until after the 303 response has been sent so
+            // wifi_poller_restart() / WiFi.begin() can't drop the socket early.
+            s_restart_pending = true;
+        }
     }
 
     s_server.sendHeader("Location", "/?saved=1");
@@ -504,6 +509,10 @@ void settings_server_stop(void) {
 }
 
 void settings_server_tick(void) {
+    if (s_restart_pending) {
+        s_restart_pending = false;
+        wifi_poller_restart();
+    }
     if (!s_running) return;
     s_server.handleClient();
 }

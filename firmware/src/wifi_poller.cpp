@@ -188,7 +188,16 @@ static void billing_period_info(const String& reset_str, UsageData* d) {
     int dim = days_in_month(py, pm);
     if (tm_start.tm_mday > dim) tm_start.tm_mday = dim;
     tm_start.tm_isdst = 0;
-    time_t period_start = mktime(&tm_start);  // TZ is UTC on this device
+    // mktime() respects the local TZ (which clock_pref_apply_tz() may have
+    // set). Force UTC for this calculation by temporarily overriding TZ.
+    char saved_tz[64] = "UTC0";
+    const char* tz_env = getenv("TZ");
+    if (tz_env) strlcpy(saved_tz, tz_env, sizeof(saved_tz));
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    time_t period_start = mktime(&tm_start);
+    setenv("TZ", saved_tz, 1);
+    tzset();
     double period_len = difftime(period_end, period_start);
     if (period_len <= 0) return;
 
@@ -419,7 +428,12 @@ void wifi_poller_tick(void) {
             if (provisioning_has_pending_wifi() && provisioning_trial_timed_out()) {
                 WiFi.disconnect();
                 provisioning_revert_pending();
-                begin_connect();
+                if (provisioning_has_wifi()) {
+                    begin_connect();
+                } else {
+                    s_state  = WIFI_ST_IDLE;
+                    s_status = WIFI_POLL_NO_CREDS;
+                }
                 return;
             }
             if (WiFi.status() == WL_CONNECTED) {
@@ -467,6 +481,17 @@ void wifi_poller_tick(void) {
             break;
 
         case WIFI_ST_FAILED:
+            // Pending trial may have timed out while we were waiting to retry.
+            if (provisioning_has_pending_wifi() && provisioning_trial_timed_out()) {
+                provisioning_revert_pending();
+                if (provisioning_has_wifi()) {
+                    begin_connect();
+                } else {
+                    s_state  = WIFI_ST_IDLE;
+                    s_status = WIFI_POLL_NO_CREDS;
+                }
+                return;
+            }
             if (now - s_state_ts >= RETRY_INTERVAL_MS) {
                 begin_connect();
             }
