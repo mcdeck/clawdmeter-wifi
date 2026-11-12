@@ -5,6 +5,28 @@
 > the Anthropic API directly over Wi-Fi — no host PC required once provisioned.
 > See [`WIFI_FORK.md`](WIFI_FORK.md) for the full technical delta.
 
+## Table of contents
+
+- [Screens](#screens)
+- [Hardware](#hardware)
+- [Prerequisites](#prerequisites)
+- [Getting started](#getting-started)
+  - [1. Flash the firmware](#1-flash-the-firmware)
+  - [2. Provision via captive portal](#2-provision-via-captive-portal-recommended)
+  - [2a. Provision via serial](#2a-provision-via-serial-alternative)
+  - [Moving to a different Wi-Fi network](#moving-to-a-different-wi-fi-network)
+- [Physical buttons](#physical-buttons)
+- [Claude Code hook integration (live reactions)](#claude-code-hook-integration-live-reactions)
+- [How it works](#how-it-works)
+- [Serial commands](#serial-commands)
+- [Recompiling fonts](#recompiling-fonts)
+- [Converting Lucide icons](#converting-lucide-icons)
+- [Splash animations](#splash-animations)
+- [Credits](#credits)
+- [Licensing gray area warning](#licensing-gray-area-warning)
+
+---
+
 A small ESP32 dashboard for your desk that tracks Claude Code usage in real time.
 It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm)
 (480×480 square) and the splash screen plays pixel-art Clawd animations that get busier as your usage climbs.
