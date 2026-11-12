@@ -1,5 +1,5 @@
 #include "splash.h"
-#include "splash_animations.h"
+#include "clawd_anim.h"
 #include "theme.h"
 #include "usage_rate.h"
 #include "hal/board_caps.h"
@@ -63,8 +63,8 @@ static void resolve_group_lists(void) {
             group_lists[g][s] = -1;
             const char* want = GROUP_NAMES[g][s];
             if (!want) continue;
-            for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
-                if (strcmp(splash_anims[i].name, want) == 0) {
+            for (int i = 0; i < clawd_anim_count(); i++) {
+                if (strcmp(clawd_anim_at(i)->name, want) == 0) {
                     group_lists[g][group_size[g]++] = (int8_t)i;
                     break;
                 }
@@ -85,7 +85,7 @@ struct GridView {
 static GridView splash_grid = { NULL, NULL, NULL, 24 };
 
 static inline uint16_t cell_colour(const uint16_t *palette, uint8_t code) {
-    return (palette && code < SPLASH_PALETTE_SIZE) ? palette[code] : COL_EMPTY;
+    return (palette && code < CLAWD_PALETTE_SIZE) ? palette[code] : COL_EMPTY;
 }
 
 static inline lv_color_t rgb565_to_color(uint16_t c) {
@@ -180,19 +180,19 @@ static void render_frame(const uint8_t *cells, const uint16_t *palette) {
 //      (e.g. the idle "sleeping" indicator). Self-contained — its own grid
 //      object, independent of the full-screen splash above. ----
 static GridView   mini_grid = { NULL, NULL, NULL, 8 };
-static const splash_anim_def_t *mini_anim = NULL;
+static const ClawdAnim *mini_anim = NULL;
 static uint16_t   mini_frame = 0;
 static uint32_t   mini_started = 0;
 
 static void mini_render(void) {
     if (!mini_anim) return;
-    grid_set_frame(&mini_grid, mini_anim->frames[mini_frame], mini_anim->palette);
+    grid_set_frame(&mini_grid, clawd_frame(mini_anim, mini_frame), mini_anim->palette);
 }
 
 lv_obj_t* splash_mini_create(lv_obj_t *parent, const char *anim_name, int px) {
     mini_anim = NULL;
-    for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
-        if (strcmp(splash_anims[i].name, anim_name) == 0) { mini_anim = &splash_anims[i]; break; }
+    for (int i = 0; i < clawd_anim_count(); i++) {
+        if (strcmp(clawd_anim_at(i)->name, anim_name) == 0) { mini_anim = clawd_anim_at(i); break; }
     }
     if (!mini_anim) return NULL;
     int mini_cell = px / GRID;
@@ -249,12 +249,12 @@ void splash_init(lv_obj_t *parent) {
 
     resolve_group_lists();
 
-    if (SPLASH_ANIM_COUNT == 0) {
+    if (clawd_anim_count() == 0) {
         show_placeholder();
     } else {
         lv_obj_set_hidden(label_status, true);
-        const splash_anim_def_t *a = &splash_anims[0];
-        render_frame(a->frames[0], a->palette);
+        const ClawdAnim *a = clawd_anim_at(0);
+        render_frame(clawd_frame(a, 0), a->palette);
         frame_started_ms = millis();
     }
 
@@ -262,37 +262,37 @@ void splash_init(lv_obj_t *parent) {
 }
 
 void splash_tick(void) {
-    if (!active || SPLASH_ANIM_COUNT == 0) return;
+    if (!active || clawd_anim_count() == 0) return;
 
     // Auto-rotate to the next animation in the current group.
     if (millis() - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
         splash_pick_for_current_rate();
     }
 
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    if (a->frame_count == 0) return;
+    const ClawdAnim *a = clawd_anim_at(cur_anim);
+    if (!a || a->frame_count == 0) return;
 
     uint16_t hold = a->holds[cur_frame];
     if (millis() - frame_started_ms >= hold) {
         cur_frame = (cur_frame + 1) % a->frame_count;
         frame_started_ms = millis();
-        render_frame(a->frames[cur_frame], a->palette);
+        render_frame(clawd_frame(a, cur_frame), a->palette);
     }
 }
 
 void splash_next(void) {
-    if (SPLASH_ANIM_COUNT == 0) return;
-    cur_anim = (cur_anim + 1) % SPLASH_ANIM_COUNT;
+    if (clawd_anim_count() == 0) return;
+    cur_anim = (uint16_t)((cur_anim + 1) % clawd_anim_count());
     cur_frame = 0;
     frame_started_ms = millis();
     last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    render_frame(a->frames[0], a->palette);
+    const ClawdAnim *a = clawd_anim_at(cur_anim);
+    render_frame(clawd_frame(a, 0), a->palette);
     Serial.printf("splash: -> %s\n", a->name);
 }
 
 void splash_pick_for_current_rate(void) {
-    if (SPLASH_ANIM_COUNT == 0) return;
+    if (clawd_anim_count() == 0) return;
     int g = usage_rate_group();
     if (g < 0 || g >= GROUP_COUNT) g = 0;
     if (group_size[g] == 0) return;
@@ -306,8 +306,8 @@ void splash_pick_for_current_rate(void) {
     cur_frame = 0;
     frame_started_ms = millis();
     last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    render_frame(a->frames[0], a->palette);
+    const ClawdAnim *a = clawd_anim_at(cur_anim);
+    render_frame(clawd_frame(a, 0), a->palette);
 }
 
 bool splash_is_active(void) { return active; }
