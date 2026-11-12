@@ -98,7 +98,7 @@ static void engage(void) { last_engagement = now_ms(); }
 // Back on the meters after a transition: attention takes over if it's
 // waiting; an alert that ended mid-transition puts the screensaver back
 // (Phase 2); otherwise he walks back to his seat from the left.
-static void arrive_meters(void) {
+[[maybe_unused]] static void arrive_meters(void) {
     if (attention_on) { go(B_ATTENTION); return; }
     if (resume_screensaver) {
         resume_screensaver = false;
@@ -244,6 +244,13 @@ void director_set_attn_anim(int seconds) {
     clawd_set_attn_anim(seconds);
 }
 
+void director_on_reset(void) {
+    if (!minimal && clawd_tuning().reactions) {
+        if (beat == B_HOME && mascot_act("jumping happy", 2)) go(B_CORNER);
+        else { joy_pending = true; joy_at = now_ms(); if (beat == B_HOME) mascot_hurry_home(); }
+    }
+}
+
 void director_set_liveliness(int level) {
     clawd_set_liveliness(level);
     const ClawdTuning& t = clawd_tuning();
@@ -274,15 +281,10 @@ void director_on_payload(const UsageData* d, const SignalsUpdate* sig) {
     have_pct = true;
     last_pct = d->session_pct;
 
-    if (sig->sessions_changed && !minimal && clawd_tuning().reactions) {
-        // Sessions changed: jumping happy twice (proxy for session reset in Phase 1).
-        if (beat == B_HOME && mascot_act("jumping happy", 2)) go(B_CORNER);
-        else {
-            joy_pending = true;
-            joy_at = now_ms();
-            if (beat == B_HOME) mascot_hurry_home();
-        }
-    }
+    // sessions_changed fires on any CC-session-count change (opening/closing a
+    // terminal); joy_pending is now set via director_on_reset() on the real
+    // 5-hour usage-window refill. Remove the sessions_changed joy trigger so
+    // "jumping happy" doesn't fire every time you open a new terminal.
 
     if (sig->event_fired) {
         engage();
@@ -325,16 +327,17 @@ void director_init(void) {
     const BoardCaps& bc = board_caps();
     int cell = 3;
     int feet_y = bc.height - 2 * cell;
-    int slot_x = (bc.width / cell) - 20 - 2;  // 20 cells wide, 2-cell right margin
+    int slot_x = bc.width - (20 + 2) * cell;   // right edge minus 22 cells (pixels)
     const ClawdAnim* tallest = clawd_anim_at(0);
     const int tallest_px = tallest ? tallest->h * cell : 20 * cell;
     feet_y = corner_seat_feet(feet_y, tallest_px, bc.height - 2, 5);
     lv_obj_t* parent = ui_mascot_parent();
-    mascot_create(parent, slot_x, feet_y, cell);
+    lv_obj_t* result = mascot_create(parent, slot_x, feet_y, cell);
+    if (!result) Serial.println("[director] WARN: mascot_create returned NULL — sprite won't render");
 
-    // Every press on the panel, wherever it lands, is a tap for the director.
-    touch_indev = lv_indev_get_next(NULL);
-    if (touch_indev) lv_indev_add_event_cb(touch_indev, indev_cb, LV_EVENT_PRESSED, NULL);
+    // Taps on the usage screen are routed via global_click_cb (LV_EVENT_CLICKED)
+    // in ui.cpp, which calls director_tap(). No indev-level hook needed here.
+    touch_indev = lv_indev_get_next(NULL);  // kept for lv_indev_get_point in indev_cb (unused path)
 }
 
 DirectorRoom director_room(void) { return ROOM_METERS; }  // Phase 2: face_visible() check
@@ -418,9 +421,7 @@ static void run_peek(uint32_t now) {
         next_step(2000);
         break;
     default:  // curious pause over: walk home (Phase 2: peek_hold → to_meters)
-        if ((uint32_t)(now - peek_up_at) >= clawd_tuning().peek_curious_ms) {
-            Serial.printf("[%lu] director: peek over (curiosity)\n", (unsigned long)now);
-        }
+        Serial.printf("[%lu] director: peek over\n", (unsigned long)now);
         mascot_return(-1, 150);
         go(B_CORNER);
         break;

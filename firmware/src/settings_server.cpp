@@ -2,6 +2,7 @@
 #include "provisioning.h"
 #include "hook_event.h"
 #include "clawd_prefs.h"
+#include "clawd_director.h"
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
@@ -236,6 +237,7 @@ void settings_server_init(void) {
             int lv   = s_server.arg("liveliness").toInt();
             int attn = s_server.arg("attn_anim").toInt();
             liveliness_set(lv);
+            director_set_liveliness(lv);  // propagate to running director immediately
             attn_anim_set(attn);
             s_server.sendHeader("Location", "/?saved=1");
             s_server.send(303);

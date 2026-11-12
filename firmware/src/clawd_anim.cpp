@@ -8,6 +8,21 @@ static_assert(SPLASH_PALETTE_SIZE == CLAWD_PALETTE_SIZE, "palette size drifted")
 static ClawdAnim table[SPLASH_ANIM_COUNT > 0 ? SPLASH_ANIM_COUNT : 1];
 static bool built = false;
 
+// Fork animation name aliases: upstream names → available fork animation names.
+// The fork ships 13 animations; several upstream names used by mascot.cpp and
+// clawd_director.cpp don't exist here. We alias them so mascot_create() doesn't
+// return NULL. The gait won't look like actual walking, but the character appears.
+static const struct { const char* from; const char* to; } ANIM_ALIASES[] = {
+    { "walking",       "idle look around"     },
+    { "lurking",       "idle breathe"         },
+    { "waving",        "expression wink"      },
+    { "pointing",      "expression surprise"  },
+    { "dancing",       "dance bounce"         },
+    { "jumping",       "dance bounce"         },
+    { "jumping happy", "dance bounce dj"      },
+};
+static const int ANIM_ALIAS_COUNT = (int)(sizeof(ANIM_ALIASES)/sizeof(ANIM_ALIASES[0]));
+
 // Fork: no live-palette recoloring. Palette pointers point straight into the
 // const data in flash; clawd_anim_recolor() is intentionally empty.
 static void build(void) {
@@ -45,6 +60,9 @@ const ClawdAnim* clawd_anim_at(int index) {
 
 int clawd_anim_index(const char* name) {
     if (!name) return -1;
+    // Check alias table first so upstream names resolve to fork animations.
+    for (int a = 0; a < ANIM_ALIAS_COUNT; a++)
+        if (strcmp(name, ANIM_ALIASES[a].from) == 0) { name = ANIM_ALIASES[a].to; break; }
     for (int i = 0; i < SPLASH_ANIM_COUNT; i++)
         if (strcmp(splash_anims[i].name, name) == 0) return i;
     return -1;

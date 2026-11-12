@@ -27,6 +27,8 @@ void director_tick(void);
 
 // Per parsed payload.
 void director_on_payload(const UsageData* d, const SignalsUpdate* sig);
+// Called when the 5-hour usage window resets (fires "jumping happy" joy).
+void director_on_reset(void);
 void director_alert(const char* message);   // attention hook fired
 void director_alert_clear(void);            // the session moved on
 bool director_take_dismissed(void);         // an alert ended on the device since the last call

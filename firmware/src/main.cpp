@@ -408,7 +408,9 @@ void loop() {
                 su.event, su.event_seq,
                 signals_sessions(), signals_activity());
             if (su.event == 'p' && clawd_attn_anim() > 0)
-                director_alert("Claude is thinking\xe2\x80\xa6");
+                director_alert("Claude is thinking...");  // ASCII only: lbl_status has no ellipsis glyph
+            if (su.event == 's')
+                director_alert_clear();
         }
         director_on_payload(&usage, &su);
     }
@@ -425,6 +427,7 @@ void loop() {
             Serial.println("session reset detected — chime");
             sound_hal_play_reset();
         }
+        if (session_reset) director_on_reset();
         if (g_after != g_before) {
             Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
                 g_before, g_after, usage.session_pct);
@@ -479,7 +482,7 @@ void loop() {
             if (msg[0] == '\0' && !usage.valid) {
                 strlcpy(msg, "Connecting...", sizeof(msg));
             }
-            ui_set_status(lvl, msg[0] ? msg : nullptr);
+            ui_set_wifi_status(lvl, msg[0] ? msg : nullptr);
         }
     }
 

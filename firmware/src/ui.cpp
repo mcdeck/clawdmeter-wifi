@@ -1038,8 +1038,16 @@ static void screen_gesture_cb(lv_event_t* e) {
 static void global_click_cb(lv_event_t* e) {
     (void)e;
     if (s_nav_locked) return;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    if (current_screen == SCREEN_SPLASH) { ui_show_screen(prev_non_splash_screen); return; }
+    // On the usage screen, taps go to the director (peek / alert dismiss).
+    // Don't toggle to splash — swiping is the navigation gesture here.
+    if (current_screen == SCREEN_USAGE) {
+        lv_point_t pos = { 0, 0 };
+        lv_indev_get_point(lv_indev_active(), &pos);
+        director_tap(pos.x);
+        return;
+    }
+    ui_show_screen(SCREEN_SPLASH);
 }
 
 static void ble_reset_click_cb(lv_event_t* e) {
@@ -1205,10 +1213,26 @@ bool ui_meters_live(void) {
     return ui_get_current_screen() == SCREEN_USAGE && s_usage_data_valid;
 }
 
+// Wi-Fi status cache: alert wins over Wi-Fi overlay while active; on clear,
+// the last Wi-Fi status is restored so errors re-appear after the alert ends.
+static ui_status_level_t s_wifi_level = UI_STATUS_NONE;
+static char s_wifi_msg[128] = {};
+static bool s_alert_active = false;
+
+void ui_set_wifi_status(ui_status_level_t level, const char* msg) {
+    s_wifi_level = level;
+    if (msg) strlcpy(s_wifi_msg, msg, sizeof(s_wifi_msg));
+    else     s_wifi_msg[0] = '\0';
+    if (!s_alert_active) ui_set_status(level, msg);  // suppress while alert is showing
+}
+
 void ui_set_alert_text(const char* msg) {
     if (msg && msg[0]) {
+        s_alert_active = true;
         ui_set_status(UI_STATUS_INFO, msg);
     } else {
-        ui_set_status(UI_STATUS_NONE, nullptr);
+        s_alert_active = false;
+        // Restore the last Wi-Fi status now that the alert is gone.
+        ui_set_status(s_wifi_level, s_wifi_msg[0] ? s_wifi_msg : nullptr);
     }
 }

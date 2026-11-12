@@ -22,6 +22,8 @@ typedef enum {
 void ui_init(void);
 void ui_update(const UsageData* data);
 void ui_set_status(ui_status_level_t level, const char* msg);
+// Wi-Fi overlay path: caches the status and suppresses it while an alert is active.
+void ui_set_wifi_status(ui_status_level_t level, const char* msg);
 void ui_tick_anim(void);
 void ui_show_screen(screen_t screen);
 void ui_cycle_screen(void);

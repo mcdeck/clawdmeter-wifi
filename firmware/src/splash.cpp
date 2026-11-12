@@ -38,7 +38,7 @@ static bool active = false;
 #define SPLASH_ROTATE_INTERVAL_MS 20000
 
 // Usage-rate animation groups: 4 groups × up to 4 animations each.
-// Filled at init by matching literal names from splash_anims[].
+// Filled at init by matching literal names from clawd_anim_at().
 #define GROUP_COUNT 4
 #define GROUP_MAX   4
 static int8_t  group_lists[GROUP_COUNT][GROUP_MAX];
