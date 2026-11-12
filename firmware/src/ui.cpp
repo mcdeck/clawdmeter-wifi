@@ -9,6 +9,7 @@
 #include "icons.h"
 #include "hal/board_caps.h"
 #include "provisioning.h"
+#include "clawd_director.h"
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
 LV_FONT_DECLARE(font_tiempos_56);
@@ -149,6 +150,7 @@ static uint32_t  last_data_ms = 0;      // lv_tick of the last valid usage updat
 static bool      data_received = false; // any valid update since boot
 static bool      showing_stale = false;
 static const uint32_t DATA_FRESH_MS = 150000;
+static bool      s_usage_data_valid = false;  // true when fresh valid data is on-screen
 
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
@@ -873,6 +875,7 @@ static void update_stale_view(void) {
     if (!panels_group || !stale_group) return;
     bool stale = data_received &&
                  (lv_tick_get() - last_data_ms) >= DATA_FRESH_MS;
+    s_usage_data_valid = data_received && !stale;
     if (stale == showing_stale) return;
     showing_stale = stale;
     lv_obj_set_hidden(panels_group, stale);
@@ -1190,4 +1193,22 @@ void ui_update_battery(int percent, bool charging) {
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
     apply_battery_visibility();
+}
+
+// ======== Director bridge ========
+
+lv_obj_t* ui_mascot_parent(void) {
+    return usage_container;
+}
+
+bool ui_meters_live(void) {
+    return ui_get_current_screen() == SCREEN_USAGE && s_usage_data_valid;
+}
+
+void ui_set_alert_text(const char* msg) {
+    if (msg && msg[0]) {
+        ui_set_status(UI_STATUS_INFO, msg);
+    } else {
+        ui_set_status(UI_STATUS_NONE, nullptr);
+    }
 }

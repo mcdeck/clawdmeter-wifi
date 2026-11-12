@@ -19,6 +19,9 @@
 #include "hook_event.h"
 #include "signals.h"
 #include "heap_log.h"
+#include "clawd_director.h"
+#include "clawd_prefs.h"
+#include "mascot.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -169,6 +172,12 @@ static void check_serial_cmd() {
                 else if (strcmp(cmd_buf, "heap") == 0) { HEAP_LOG("cmd"); HEAP_LOG_LVGL("cmd"); }
                 else if (strcmp(cmd_buf, "cpu") == 0) CPU_LOG("cmd");
 #endif
+                else if (strncmp(cmd_buf, "clawd", 5) == 0) {
+                    // "clawd home", "clawd attention", "clawd trace", etc.
+                    const char* arg = cmd_buf + 5;
+                    if (*arg == ' ') arg++;
+                    director_debug(arg);
+                }
                 else {
                     provisioning_handle_cmd(cmd_buf);
                     ui_update_wifi_creds(captive_portal_is_active());
@@ -237,6 +246,8 @@ void setup() {
     HEAP_LOG("pre ui_init");
 
     ui_init();
+    clawd_prefs_init();
+    director_init();
     HEAP_LOG("post ui_init");
     HEAP_LOG_LVGL("post ui_init");
     CPU_LOG("boot");
@@ -270,6 +281,8 @@ void loop() {
     wifi_poller_tick();
     captive_portal_tick();
     settings_server_tick();
+    director_tick();
+    mascot_tick();
     ui_tick_anim();
     ble_tick();
     power_hal_tick();
@@ -323,7 +336,7 @@ void loop() {
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
                 if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          ui_cycle_screen();
+                else if (!director_button(true))              ui_cycle_screen();
             }
         }
 
@@ -394,7 +407,10 @@ void loop() {
             Serial.printf("signals: event '%c' seq=%u sessions=%d activity=%d\n",
                 su.event, su.event_seq,
                 signals_sessions(), signals_activity());
+            if (su.event == 'p' && clawd_attn_anim() > 0)
+                director_alert("Claude is thinking\xe2\x80\xa6");
         }
+        director_on_payload(&usage, &su);
     }
 
     if (wifi_poller_has_new_data()) {
@@ -415,6 +431,8 @@ void loop() {
             if (splash_is_active()) splash_pick_for_current_rate();
         }
         ui_update(&usage);
+        SignalsUpdate su_empty = {};
+        director_on_payload(&usage, &su_empty);
     }
 
     // Wifi status overlay — update whenever status or data-validity changes.

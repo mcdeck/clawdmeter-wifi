@@ -1,6 +1,7 @@
 #pragma once
 #include "data.h"
 #include "ble.h"
+#include <lvgl.h>
 
 enum screen_t {
     SCREEN_SPLASH,
@@ -36,3 +37,8 @@ void ui_set_nav_locked(bool locked);
 // from their backing stores. Call after an external change (e.g.
 // `chime on|off` over serial).
 void ui_settings_refresh(void);
+
+// Director bridge — implemented in ui.cpp; extern'd by clawd_director.cpp
+lv_obj_t* ui_mascot_parent(void);         // SCREEN_USAGE root container
+bool      ui_meters_live(void);           // true when SCREEN_USAGE active + data valid
+void      ui_set_alert_text(const char* msg);  // director attention overlay
