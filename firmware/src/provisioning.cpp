@@ -11,6 +11,14 @@ static String s_pass;
 static String s_web_pass;
 static String s_event_token;
 
+// Pending Wi-Fi trial state
+static String   s_ssid_new;
+static String   s_pass_new;
+static bool     s_trial_active  = false;
+static uint32_t s_trial_start   = 0;
+static bool     s_reverted      = false;
+static bool     s_no_revert     = false;
+
 static void save_and_cache(const char* key, const char* value, String& cache) {
     Preferences prefs;
     prefs.begin(NVS_NS, false);
@@ -31,7 +39,18 @@ void provisioning_init(void) {
     s_pass        = prefs.getString("pass",        "");
     s_web_pass    = prefs.getString("web_pass",    "");
     s_event_token = prefs.getString("event_token", "");
+    s_ssid_new    = prefs.getString("ssid_new",    "");
+    s_pass_new    = prefs.getString("pass_new",    "");
+    s_no_revert   = prefs.getBool("no_revert",     false);
+    s_reverted    = prefs.getBool("reverted",      false);
     prefs.end();
+    // Clear the one-shot reverted flag immediately after reading it.
+    if (s_reverted) {
+        Preferences pw;
+        pw.begin(NVS_NS, false);
+        pw.putBool("reverted", false);
+        pw.end();
+    }
     Serial.printf("prov: token=%s ssid=%s pass=%s webpass=%s event_token=%s\n",
         s_token.length()       ? s_token.substring(0, 20).c_str() : "(none)",
         s_ssid.length()        ? s_ssid.c_str()                   : "(none)",
@@ -162,4 +181,92 @@ void provisioning_save_wifi(const char* ssid, const char* pass, const char* toke
     xSemaphoreGive(s_mutex);
     Serial.printf("prov: saved ssid=%s pass=*** token=%s\n",
         ssid, (token && *token) ? "set" : "unchanged");
+}
+
+// ---- Pending Wi-Fi credential trial ----
+
+void provisioning_save_pending_wifi(const char* ssid, const char* pass) {
+    if (s_no_revert) {
+        // Safety revert disabled — write directly to current slots.
+        provisioning_save_wifi(ssid, pass, nullptr);
+        return;
+    }
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putString("ssid_new", ssid ? ssid : "");
+    prefs.putString("pass_new", pass ? pass : "");
+    prefs.end();
+    s_ssid_new = ssid ? ssid : "";
+    s_pass_new = pass ? pass : "";
+    Serial.printf("prov: pending ssid=%s\n", s_ssid_new.c_str());
+}
+
+bool provisioning_has_pending_wifi(void) {
+    return s_ssid_new.length() > 0;
+}
+
+void provisioning_get_trial_creds(String& ssid_out, String& pass_out) {
+    if (s_ssid_new.length() > 0) {
+        ssid_out = s_ssid_new;
+        pass_out = s_pass_new;
+        s_trial_start  = millis();
+        s_trial_active = true;
+    } else {
+        ssid_out = s_ssid;
+        pass_out = s_pass;
+        s_trial_active = false;
+    }
+}
+
+bool provisioning_trial_timed_out(void) {
+    return s_trial_active && (millis() - s_trial_start) > 30000UL;
+}
+
+void provisioning_promote_pending(void) {
+    if (s_ssid_new.length() == 0) return;
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putString("ssid", s_ssid_new.c_str());
+    prefs.putString("pass", s_pass_new.c_str());
+    prefs.putString("ssid_new", "");
+    prefs.putString("pass_new", "");
+    prefs.end();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_ssid = s_ssid_new;
+    s_pass = s_pass_new;
+    xSemaphoreGive(s_mutex);
+    s_ssid_new = "";
+    s_pass_new = "";
+    s_trial_active = false;
+    Serial.println("prov: pending credentials promoted");
+}
+
+void provisioning_revert_pending(void) {
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putString("ssid_new", "");
+    prefs.putString("pass_new", "");
+    prefs.putBool("reverted", true);
+    prefs.end();
+    s_ssid_new     = "";
+    s_pass_new     = "";
+    s_trial_active = false;
+    s_reverted     = true;
+    Serial.println("prov: pending credentials reverted");
+}
+
+bool provisioning_take_reverted(void) {
+    bool r    = s_reverted;
+    s_reverted = false;
+    return r;
+}
+
+bool provisioning_no_revert(void)        { return s_no_revert; }
+
+void provisioning_set_no_revert(bool v) {
+    s_no_revert = v;
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putBool("no_revert", v);
+    prefs.end();
 }

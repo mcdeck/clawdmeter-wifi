@@ -1,5 +1,6 @@
 #include "wifi_poller.h"
 #include "provisioning.h"
+#include "clock_pref.h"
 #include "settings_server.h"
 #include "heap_log.h"
 #include <WiFi.h>
@@ -133,8 +134,9 @@ static void* tls_calloc_psram(size_t n, size_t size) {
 }
 
 static void begin_connect() {
-    String ssid = provisioning_get_ssid();
-    WiFi.begin(ssid.c_str(), provisioning_get_pass().c_str());
+    String ssid, pass;
+    provisioning_get_trial_creds(ssid, pass);
+    WiFi.begin(ssid.c_str(), pass.c_str());
     s_state    = WIFI_ST_CONNECTING;
     s_state_ts = millis();
     s_status   = WIFI_POLL_CONNECTING;
@@ -413,6 +415,13 @@ void wifi_poller_tick(void) {
             break;
 
         case WIFI_ST_CONNECTING:
+            // Pending trial: revert if the 30s window expired without connecting.
+            if (provisioning_has_pending_wifi() && provisioning_trial_timed_out()) {
+                WiFi.disconnect();
+                provisioning_revert_pending();
+                begin_connect();
+                return;
+            }
             if (WiFi.status() == WL_CONNECTED) {
                 s_state           = WIFI_ST_CONNECTED;
                 s_status          = WIFI_POLL_IDLE;
@@ -422,6 +431,8 @@ void wifi_poller_tick(void) {
                 Serial.printf("wifi: connected, IP=%s\n",
                     WiFi.localIP().toString().c_str());
                 configTime(0, 0, "pool.ntp.org");
+                provisioning_promote_pending();
+                clock_pref_apply_tz();
                 settings_server_start();
             } else if (now - s_state_ts >= CONNECT_TIMEOUT_MS) {
                 WiFi.disconnect();
