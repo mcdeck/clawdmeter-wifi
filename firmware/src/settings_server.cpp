@@ -32,8 +32,14 @@ static const char SETTINGS_HTML[] = R"html(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ClawdMeter Settings</title>
 <style>
-body{font-family:sans-serif;max-width:520px;margin:40px auto;padding:0 20px;
-     background:#1a1a1a;color:#e8e0d4}
+body{font-family:sans-serif;margin:0;background:#1a1a1a;color:#e8e0d4}
+.page-wrap{display:flex;gap:0;max-width:720px;margin:40px auto;padding:0 20px;align-items:flex-start}
+.nav-toc{flex-shrink:0;width:130px;position:sticky;top:20px;padding-right:24px}
+.nav-toc a{display:block;font-size:.8em;color:#555;text-decoration:none;padding:5px 0 5px 10px;border-left:2px solid #2a2a2a;margin-bottom:2px;transition:color .15s,border-color .15s}
+.nav-toc a:hover{color:#aaa;border-left-color:#555}
+.nav-toc a.active{color:#e8e0d4;border-left-color:#d97757}
+.content{flex:1;min-width:0}
+@media(max-width:659px){.nav-toc{display:none}}
 h1{margin-bottom:4px}
 .sub{color:#888;font-size:.9em;margin:0 0 32px}
 h2{font-size:.85em;color:#888;text-transform:uppercase;letter-spacing:.08em;
@@ -44,6 +50,7 @@ label{display:block;font-size:.85em;color:#888;margin-bottom:4px}
 .info.dim{color:#555}
 input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #444;
      border-radius:6px;background:#252525;color:#e8e0d4;font-size:1em}
+input[type="checkbox"],input[type="radio"]{width:auto;margin-right:6px;vertical-align:middle}
 select{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #444;
        border-radius:6px;background:#252525;color:#e8e0d4;font-size:1em;margin-bottom:12px}
 .row{display:flex;gap:8px;align-items:stretch;margin-bottom:4px}
@@ -59,11 +66,20 @@ form{margin:0 0 8px}
 </style>
 </head>
 <body>
+<div class="page-wrap">
+<nav class="nav-toc">
+<a href="#security">Security</a>
+<a href="#clawd">Clawd</a>
+<a href="#device">Device</a>
+<a href="#connection">Connection</a>
+</nav>
+<div class="content">
 <h1>ClawdMeter</h1>
 <p class="sub">Settings &middot; <span id="host">clawdmeter.local</span></p>
 
 %BANNER%
 
+<section id="security">
 <h2>Security</h2>
 
 <form method="POST" action="/settings/webpass">
@@ -99,6 +115,7 @@ form{margin:0 0 8px}
     &nbsp;&nbsp;-d "t=p&amp;es=1&amp;n=1&amp;a=2"</code>
   </p>
 </form>
+</section>
 
 %CLAWD_SECTION%
 
@@ -106,6 +123,8 @@ form{margin:0 0 8px}
 
 %CONNECTION_SECTION%
 
+</div>
+</div>
 <script>
 document.getElementById('host').textContent = location.host;
 function gen() {
@@ -114,6 +133,19 @@ function gen() {
   document.getElementById('evtok').value =
     Array.from(a).map(b => b.toString(16).padStart(2,'0')).join('');
 }
+var secs = document.querySelectorAll('section[id]');
+function markActive(){
+  var best = null, bst = -Infinity;
+  secs.forEach(function(s){
+    var t = s.getBoundingClientRect().top;
+    if(t <= 80 && t > bst){bst=t;best=s.id;}
+  });
+  document.querySelectorAll('.nav-toc a').forEach(function(a){
+    a.classList.toggle('active', a.getAttribute('href')==='#'+best);
+  });
+}
+window.addEventListener('scroll',markActive,{passive:true});
+markActive();
 </script>
 </body>
 </html>)html";
@@ -156,7 +188,7 @@ static String build_page(const char* banner) {
     bool fp_react = feature_pref_reactions();
     char clawd[3072];
     snprintf(clawd, sizeof(clawd),
-        "<section>"
+        "<section id=\"clawd\">"
         "<h2>Clawd</h2>"
         "<form method=\"post\" action=\"/settings/clawd\">"
         "<label>Liveliness<br>"
@@ -193,13 +225,14 @@ static String build_page(const char* banner) {
     // ---- Device settings section ----
     String ds;
     ds.reserve(4096);
-    ds += "<section><h2>Device settings</h2>"
+    ds += "<section id=\"device\"><h2>Device settings</h2>"
           "<form method=\"POST\" action=\"/save-settings\">";
 
     // Clock
     bool clk_on = clock_pref_on();
     int  clk_fmt = clock_pref_fmt();
-    const char* clk_tz = clock_pref_tz();
+    const char* clk_tz      = clock_pref_tz();
+    const char* clk_tz_name = clock_pref_tz_name();
     ds += "<label><input type=\"checkbox\" name=\"clk_on\"";
     if (clk_on) ds += " checked";
     ds += "> Show clock (replaces &ldquo;Usage&rdquo; title)</label>";
@@ -234,10 +267,12 @@ static String build_page(const char* banner) {
             ds += grp;
             strlcpy(cur_region, region, sizeof(cur_region));
         }
-        bool sel = strcmp(tz_list[i].posix, clk_tz) == 0;
+        bool sel = (clk_tz_name[0] != '\0')
+            ? (strcmp(tz_list[i].name, clk_tz_name) == 0)
+            : (strcmp(tz_list[i].posix, clk_tz) == 0);
         char opt[128];
         snprintf(opt, sizeof(opt), "<option value=\"%s\"%s>%s</option>",
-                 tz_list[i].posix, sel ? " selected" : "",
+                 tz_list[i].name, sel ? " selected" : "",
                  slash ? slash + 1 : tz_list[i].name);
         ds += opt;
     }
@@ -319,7 +354,7 @@ static String build_page(const char* banner) {
     bool   no_rev = provisioning_no_revert();
     String cs;
     cs.reserve(1024);
-    cs += "<section><h2>Connection</h2>"
+    cs += "<section id=\"connection\"><h2>Connection</h2>"
           "<form method=\"POST\" action=\"/save-connection\">"
           "<label>SSID<input type=\"text\" name=\"ssid\" placeholder=\"";
     cs += ssid.length() ? ssid : "(not configured)";
@@ -368,12 +403,18 @@ static void handle_save_eventtoken(void) {
 static void handle_save_settings(void) {
     if (!check_web_auth()) return;
 
-    // Clock
+    // Clock — arg is now an IANA name (e.g. "Europe/Berlin"); look up its POSIX string
     bool clk_on  = s_server.hasArg("clk_on");
     int  clk_fmt = s_server.arg("clk_fmt") == "12" ? 12 : 24;
-    String clk_tz = s_server.arg("clk_tz");
-    if (clk_tz.length() == 0) clk_tz = "UTC0";
-    clock_pref_set(clk_on, clk_fmt, clk_tz.c_str());
+    String clk_tz_name_arg = s_server.arg("clk_tz");
+    const char* posix = "UTC0";
+    for (int i = 0; i < tz_list_count; i++) {
+        if (strcmp(tz_list[i].name, clk_tz_name_arg.c_str()) == 0) {
+            posix = tz_list[i].posix;
+            break;
+        }
+    }
+    clock_pref_set(clk_on, clk_fmt, posix, clk_tz_name_arg.c_str());
 
     // Pace
     pace_pref_set(s_server.hasArg("pace_on"));

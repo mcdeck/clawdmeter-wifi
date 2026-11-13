@@ -9,5 +9,6 @@ void clock_pref_load(void);         // read NVS → static vars (call before ui_
 void clock_pref_apply_tz(void);     // setenv("TZ", ...) + tzset(); call after NTP sync
 bool clock_pref_on(void);
 int  clock_pref_fmt(void);          // returns 24 or 12
-const char* clock_pref_tz(void);    // returns POSIX rule string
-void clock_pref_set(bool on, int fmt, const char* posix_tz);  // persist + apply
+const char* clock_pref_tz(void);        // returns POSIX rule string
+const char* clock_pref_tz_name(void);   // returns IANA name (e.g. "Europe/Berlin")
+void clock_pref_set(bool on, int fmt, const char* posix_tz, const char* tz_name);  // persist + apply
