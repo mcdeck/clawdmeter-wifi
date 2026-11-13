@@ -199,25 +199,28 @@ curl -s http://clawdmeter.local/event -X POST -d "t=p"
 If mDNS doesn't work on your network, find the IP on the device's Wi-Fi screen or
 your router's DHCP table, then set `CLAWDMETER_URL` as described in step 3.
 
-### 2. Set an event token (optional but recommended)
+### 2. Configure env vars (optional)
 
-The `POST /event` endpoint accepts unauthenticated requests by default (fine on a
-home LAN). To require a secret:
+Both connection settings are controlled by env vars in `~/.claude/settings.json`:
 
-1. Open **http://clawdmeter.local** in a browser.
-2. Under **Hook event token**, enter any string and save.
-3. Add `-H "Authorization: Bearer <token>"` to your hook's `curl` call (see below).
+| Var | Default | When to set |
+|-----|---------|-------------|
+| `CLAWDMETER_URL` | `http://clawdmeter.local` | mDNS doesn't work (WSL, some networks) |
+| `CLAWDMETER_TOKEN` | _(empty)_ | You set a Hook event token on the device |
+
+To set a Hook event token on the device: open **http://clawdmeter.local** in a
+browser → **Hook event token** → enter any string and save.
 
 ### 3. Add hooks to Claude Code
 
-Add the following to `~/.claude/settings.json` (applies to all projects). The
-`CLAWDMETER_URL` env var overrides the default `clawdmeter.local` address — omit
-the `env` block if mDNS works on your network.
+Add the following to `~/.claude/settings.json`. Omit the `env` block entirely if
+`clawdmeter.local` resolves and you haven't set an event token.
 
 ```json
 {
   "env": {
-    "CLAWDMETER_URL": "http://192.168.1.42"
+    "CLAWDMETER_URL": "http://192.168.1.42",
+    "CLAWDMETER_TOKEN": "your-token-here"
   },
   "hooks": {
     "PreToolUse": [
@@ -226,7 +229,7 @@ the `env` block if mDNS works on your network.
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=p' -o /dev/null"
+            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=p' -H \"Authorization: Bearer ${CLAWDMETER_TOKEN}\" -o /dev/null"
           }
         ]
       }
@@ -237,7 +240,7 @@ the `env` block if mDNS works on your network.
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=s' -o /dev/null"
+            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=s' -H \"Authorization: Bearer ${CLAWDMETER_TOKEN}\" -o /dev/null"
           }
         ]
       }
@@ -245,8 +248,6 @@ the `env` block if mDNS works on your network.
   }
 }
 ```
-
-If you set an event token, add `-H "Authorization: Bearer <token>"` to each `curl` call.
 
 ### Installing the skill globally
 
