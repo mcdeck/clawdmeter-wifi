@@ -62,6 +62,7 @@ static bool        have_pct = false;
 static float       last_pct = 0;
 static bool        joy_pending = false;
 static uint32_t    joy_at = 0;
+static uint32_t    calm_at = 0;
 static bool        minimal = false;
 static ClawdRng    rng;
 
@@ -71,6 +72,8 @@ static uint32_t    peek_up_at = 0;
 static lv_indev_t* touch_indev = NULL;
 
 static uint32_t now_ms(void) { return millis(); }
+
+static void arrive_meters(void);  // forward declaration — defined in beat scripts
 
 static void go(Beat b) {
     if (b != beat) Serial.printf("[%lu] director: %s -> %s\n", (unsigned long)now_ms(),
@@ -104,7 +107,12 @@ static void engage(void) { last_engagement = now_ms(); }
     if (attention_on) { go(B_ATTENTION); return; }
     if (resume_screensaver) {
         resume_screensaver = false;
-        // Phase 2: screensaver resume
+        face_rise();
+        calm_at = now_ms() + clawd_jitter(
+            (clawd_tuning().calm_min_ms + clawd_tuning().calm_max_ms) / 2, &rng);
+        go(B_SCREENSAVER);
+        step = 2;
+        return;
     }
     mascot_return(-1, 150);
     go(B_CORNER);
@@ -126,12 +134,14 @@ static void react(const char* anim, uint8_t times) {
 // "Show me the meters": the fastest no-cut path from wherever we are.
 static void to_meters(bool noticed) {
     (void)noticed;
-    if (beat == B_FACE_HOME || beat == B_RUN_HOME) return;   // already on the way
-    // Phase 2: face_set_resting(false), face_visible() → B_FACE_HOME, performing → B_RUN_HOME
-    if (beat == B_SHOW || beat == B_SCREENSAVER) {
+    if (beat == B_FACE_HOME || beat == B_RUN_HOME) return;
+    if (face_visible()) { face_set_resting(false); go(B_FACE_HOME); return; }
+    if (beat == B_SHOW) { go(B_RUN_HOME); return; }
+    if (beat == B_SCREENSAVER) {
         if (attention_on) { go(B_ATTENTION); return; }
-        mascot_return(-1, 150);
-        go(B_CORNER);
+        face_set_resting(false);
+        go(B_FACE_HOME);
+        return;
     }
 }
 
@@ -372,9 +382,7 @@ static void run_home(uint32_t now) {
     }
     const bool live = ui_meters_live();
     QuietInput q = { now, last_engagement, signals_hooks_seen(), window_not_started, live };
-    // Phase 2: screensaver
-    (void)q;
-    // if (screensaver_ready(&q, &clawd_tuning())) { go(B_SCREENSAVER); return; }
+    if (screensaver_ready(&q, &clawd_tuning())) { go(B_SCREENSAVER); return; }
     if (live && signals_hooks_seen() && show_gate_ready(&show_gate, now, &clawd_tuning()))
         { go(B_SHOW); return; }
 }
@@ -397,16 +405,98 @@ static void run_attention(uint32_t now) {
     }
     // Over: wait for the big one to leave and the small one to sit down.
     if (mascot_in_attention() || mascot_busy()) return;
-    if (resume_screensaver) {
-        resume_screensaver = false;
-        // Phase 2: screensaver resume
-    }
     if (mascot_away()) {
         mascot_return(-1, 150);
         go(B_CORNER);
         return;
     }
-    go(B_HOME);
+    arrive_meters();
+}
+
+static void run_screensaver(uint32_t now) {
+    switch (step) {
+    case 0:
+        mascot_leave(100);
+        face_rise();
+        next_step();
+        break;
+    case 1:
+        if (!mascot_away() || face_moving()) return;
+        face_set_resting(true);
+        calm_at = now + clawd_jitter(
+            (clawd_tuning().calm_min_ms + clawd_tuning().calm_max_ms) / 2, &rng);
+        next_step();
+        break;
+    case 2:
+        if (!performer_available()) return;
+        if ((int32_t)(now - calm_at) < 0) return;
+        face_set_resting(false);
+        performer_place_offstage(PERFORMER_LEFT);
+        next_step();
+        break;
+    case 3:
+        if (!settled()) return;
+        performer_walk_home(100);
+        next_step();
+        break;
+    case 4:
+        if (performer_busy()) return;
+        performer_perform_group(0, clawd_tuning().calm_scene_ms, true);
+        next_step();
+        break;
+    case 5:
+        if (performer_busy()) return;
+        performer_walk_off(PERFORMER_LEFT, 100);
+        next_step();
+        break;
+    default:
+        if (performer_busy()) return;
+        face_set_resting(true);
+        calm_at = now + clawd_jitter(
+            (clawd_tuning().calm_min_ms + clawd_tuning().calm_max_ms) / 2, &rng);
+        step = 2;
+        break;
+    }
+}
+
+static void run_face_home(uint32_t now) {
+    (void)now;
+    switch (step) {
+    case 0:
+        face_blink(false);
+        next_step();
+        break;
+    case 1:
+        if (face_busy()) return;
+        face_drop();
+        face_set_resting(false);
+        next_step();
+        break;
+    default:
+        if (face_visible()) return;
+        mascot_hurry_home();
+        go(B_CORNER);
+        break;
+    }
+}
+
+static void run_run_home(uint32_t now) {
+    switch (step) {
+    case 0:
+        performer_release();
+        next_step(200);
+        break;
+    case 1:
+        if ((int32_t)(now - wait_until) < 0) return;
+        performer_run_off(PERFORMER_LEFT, 150, 300, 400);
+        mascot_return(-1, 150);
+        next_step();
+        break;
+    default:
+        if (performer_busy() || mascot_busy()) return;
+        go(B_HOME);
+        break;
+    }
 }
 
 static void run_show(uint32_t now) {
@@ -494,9 +584,9 @@ void director_tick(void) {
     case B_HOME:        run_home(now); break;
     case B_CORNER:      run_corner(now); break;
     case B_SHOW:        run_show(now); break;
-    case B_SCREENSAVER: go(B_HOME); break;        // Phase 2
-    case B_FACE_HOME:   go(B_HOME); break;        // Phase 2
-    case B_RUN_HOME:    go(B_HOME); break;        // Phase 2
+    case B_SCREENSAVER: run_screensaver(now); break;
+    case B_FACE_HOME:   run_face_home(now);   break;
+    case B_RUN_HOME:    run_run_home(now);    break;
     case B_ATTENTION:   run_attention(now); break;
     case B_PEEK:        run_peek(now); break;
     }
@@ -542,6 +632,6 @@ bool director_debug(const char* name) {
     const bool show = strcmp(name, "show") == 0;
     if (!show && strcmp(name, "screensaver") != 0) return false;
     if (beat != B_HOME) return false;
-    go(B_HOME);  // Phase 2: B_SHOW / B_SCREENSAVER
+    go(show ? B_SHOW : B_SCREENSAVER);
     return true;
 }
