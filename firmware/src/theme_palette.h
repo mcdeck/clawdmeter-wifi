@@ -12,7 +12,9 @@ enum ThemeColor {
     TH_AMBER  = 6,
     TH_RED    = 7,
     TH_BAR_BG = 8,
-    TH_COUNT  = 9,
+    TH_CLAWD  = 9,   // Clawd orange — face body colour
+    TH_EYE    = 10,  // near-black  — face eye colour
+    TH_COUNT  = 11,
 };
 
 // Set the live palette from an array of TH_COUNT 0xRRGGBB values.
@@ -24,9 +26,9 @@ uint32_t theme_hex(ThemeColor c);
 // Return the RGB565 value for a slot from the live palette.
 uint16_t theme_rgb565(ThemeColor c);
 
-// Parse a 54-char hex string (9 × 6 hex digits, no separators) into colors[].
+// Parse a 66-char hex string (11 × 6 hex digits, no separators) into colors[].
 // On malformed input the output is undefined; caller should validate length first.
-void theme_parse_hex(const char* hex54, uint32_t out[TH_COUNT]);
+void theme_parse_hex(const char* hex66, uint32_t out[TH_COUNT]);
 
-// Format colors[] into a 54-char hex string + null terminator (55 bytes).
-void theme_format_hex(const uint32_t colors[TH_COUNT], char out55[55]);
+// Format colors[] into a 66-char hex string + null terminator (67 bytes).
+void theme_format_hex(const uint32_t colors[TH_COUNT], char out67[67]);

@@ -13,6 +13,8 @@ static uint32_t s_palette[TH_COUNT] = {
     0xd97757,   // TH_AMBER
     0xc0392b,   // TH_RED
     0x2a2a28,   // TH_BAR_BG
+    0xE8622A,   // TH_CLAWD — Clawd orange
+    0x1A1A1A,   // TH_EYE  — near-black
 };
 
 void theme_palette_set(const uint32_t colors[TH_COUNT]) {
@@ -34,11 +36,11 @@ uint16_t theme_rgb565(ThemeColor c) {
            ((uint16_t)(b >> 3));
 }
 
-void theme_parse_hex(const char* hex54, uint32_t out[TH_COUNT]) {
+void theme_parse_hex(const char* hex66, uint32_t out[TH_COUNT]) {
     for (int i = 0; i < TH_COUNT; i++) {
         uint32_t v = 0;
         for (int j = 0; j < 6; j++) {
-            char c = hex54[i * 6 + j];
+            char c = hex66[i * 6 + j];
             uint8_t nib;
             if      (c >= '0' && c <= '9') nib = c - '0';
             else if (c >= 'a' && c <= 'f') nib = c - 'a' + 10;
@@ -50,9 +52,9 @@ void theme_parse_hex(const char* hex54, uint32_t out[TH_COUNT]) {
     }
 }
 
-void theme_format_hex(const uint32_t colors[TH_COUNT], char out55[55]) {
+void theme_format_hex(const uint32_t colors[TH_COUNT], char out67[67]) {
     for (int i = 0; i < TH_COUNT; i++) {
-        snprintf(out55 + i * 6, 7, "%06x", (unsigned)colors[i]);
+        snprintf(out67 + i * 6, 7, "%06x", (unsigned)colors[i]);
     }
-    out55[TH_COUNT * 6] = '\0';
+    out67[TH_COUNT * 6] = '\0';
 }
