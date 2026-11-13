@@ -41,6 +41,7 @@ static int              p_x         = 0;
 static int              walk_target = 0;
 static int              walk_dir    = +1;
 static uint16_t         walk_speed  = 100;
+static bool             walk_exit   = false;  // hide + P_OFF when walk reaches target
 
 // run_off ramping
 static bool     ramp_active  = false;
@@ -152,10 +153,11 @@ void performer_place_offstage(int side) {
     render_frame();
 }
 
-static void start_walk(int target, uint16_t spd) {
+static void start_walk(int target, uint16_t spd, bool exit_on_arrive = false) {
     walk_target = target;
     walk_dir = (target > p_x) ? +1 : -1;
     walk_speed = spd ? spd : 100;
+    walk_exit = exit_on_arrive;
     ramp_active = false;
     p_anim = walk_anim;
     p_frame = walk_anim->loop_start;
@@ -174,7 +176,7 @@ void performer_walk_home(uint16_t speed_pct) {
 void performer_walk_off(int side, uint16_t speed_pct) {
     if (!available) return;
     const int target = (side == PERFORMER_LEFT) ? offstage_left() : offstage_right();
-    start_walk(target, speed_pct);
+    start_walk(target, speed_pct, true);
 }
 
 void performer_run_off(int side, uint16_t from_pct, uint16_t to_pct, uint32_t ramp_duration_ms) {
@@ -185,7 +187,7 @@ void performer_run_off(int side, uint16_t from_pct, uint16_t to_pct, uint32_t ra
     ramp_ms      = ramp_duration_ms;
     ramp_started = millis();
     ramp_active  = true;
-    start_walk(target, from_pct);
+    start_walk(target, from_pct, true);
 }
 
 void performer_perform(int anim_index, uint32_t loop_ms) {
@@ -283,8 +285,13 @@ void performer_tick(void) {
                 p_x = walk_target;
                 ramp_active = false;
                 perf_end(PERF_PERFORMER_WALK);
-                state = P_STAND;
-                render_frame();
+                if (walk_exit) {
+                    show_obj(false);
+                    state = P_OFF;
+                } else {
+                    state = P_STAND;
+                    render_frame();
+                }
                 return;
             }
         }

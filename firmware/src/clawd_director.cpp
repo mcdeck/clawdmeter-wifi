@@ -108,6 +108,7 @@ static void engage(void) { last_engagement = now_ms(); }
     if (resume_screensaver) {
         resume_screensaver = false;
         face_rise();
+        face_set_resting(true);
         calm_at = now_ms() + clawd_jitter(
             (clawd_tuning().calm_min_ms + clawd_tuning().calm_max_ms) / 2, &rng);
         go(B_SCREENSAVER);
@@ -186,8 +187,9 @@ void director_alert(const char* message) {
     if (attention_on) return;
     attention_on = true;
     if (beat == B_ATTENTION) { step = 0; return; }
-    // Phase 2: face_visible() → B_FACE_HOME, performing → B_RUN_HOME
-    // Attention never waits: interrupt whatever is on.
+    // Alert is urgent: hide the face and performer before the big Clawd appears.
+    if (face_visible()) { face_set_resting(false); face_hide_now(); }
+    if (performer_visible()) { performer_release(); performer_run_off(PERFORMER_LEFT, 150, 300, 400); }
     go(B_ATTENTION);
 }
 
@@ -234,7 +236,7 @@ void director_tap(int x) {
         return;
     }
     if (beat == B_PEEK) {
-        if (face_visible()) { face_drop(); face_set_resting(false); }
+        if (face_visible()) { face_set_resting(false); go(B_FACE_HOME); }
         return;
     }
     to_meters(false);
@@ -289,7 +291,7 @@ void director_on_payload(const UsageData* d, const SignalsUpdate* sig) {
     // The slow clock moving counts as you being around.
     if (have_pct && d->session_pct > last_pct + 0.01f) {
         engage();
-        // Phase 2: screensaver wake-up here
+        if (beat == B_SCREENSAVER || face_visible()) to_meters(true);
     }
     have_pct = true;
     last_pct = d->session_pct;
@@ -305,7 +307,7 @@ void director_on_payload(const UsageData* d, const SignalsUpdate* sig) {
         if (minimal) return;
         if (sig->event == 'p' || sig->event == 'b') {
             resume_screensaver = false;
-            // Phase 2: screensaver wake-on-prompt (to_meters(true))
+            if (beat == B_SCREENSAVER || face_visible()) { to_meters(true); return; }
             react("pointing", 1);
         } else if (sig->event == 's' && wave) {
             react("waving", 1);
@@ -318,7 +320,8 @@ static void apply_minimal(bool on) {
     minimal = on;
     react_anim = NULL;
     resume_screensaver = false;
-    // Phase 2: face_hide_now(), performer_place_offstage()
+    face_hide_now();
+    if (performer_visible()) { performer_release(); performer_run_off(PERFORMER_LEFT, 150, 300, 0); }
     mascot_set_minimal(on);
     beat = attention_on ? B_ATTENTION : B_HOME;
     step = 0;
@@ -431,6 +434,7 @@ static void run_screensaver(uint32_t now) {
         if (!performer_available()) return;
         if ((int32_t)(now - calm_at) < 0) return;
         face_set_resting(false);
+        face_drop();   // move face out of the way so performer is visible
         performer_place_offstage(PERFORMER_LEFT);
         next_step();
         break;
@@ -451,6 +455,7 @@ static void run_screensaver(uint32_t now) {
         break;
     default:
         if (performer_busy()) return;
+        face_rise();   // raise face again after the calm dip
         face_set_resting(true);
         calm_at = now + clawd_jitter(
             (clawd_tuning().calm_min_ms + clawd_tuning().calm_max_ms) / 2, &rng);
@@ -464,10 +469,15 @@ static void run_face_home(uint32_t now) {
     switch (step) {
     case 0:
         face_blink(false);
+        // If a calm dip is in progress, freeze and exit the performer now.
+        if (performer_visible()) {
+            performer_release();
+            performer_walk_off(PERFORMER_LEFT, 150);
+        }
         next_step();
         break;
     case 1:
-        if (face_busy()) return;
+        if (face_busy() || performer_busy()) return;
         face_drop();
         face_set_resting(false);
         next_step();
@@ -489,7 +499,7 @@ static void run_run_home(uint32_t now) {
     case 1:
         if ((int32_t)(now - wait_until) < 0) return;
         performer_run_off(PERFORMER_LEFT, 150, 300, 400);
-        mascot_return(-1, 150);
+        mascot_hurry_home();
         next_step();
         break;
     default:
@@ -502,7 +512,7 @@ static void run_run_home(uint32_t now) {
 static void run_show(uint32_t now) {
     (void)now;
     if (!performer_available()) {
-        if (mascot_act("dancing", 2)) go(B_CORNER);
+        if (mascot_act("dancing", 2)) { show_gate_mark_shown(&show_gate, now_ms()); go(B_CORNER); }
         return;
     }
     switch (step) {
@@ -548,7 +558,8 @@ static void run_show(uint32_t now) {
 // A tap on the meters: face rises, mascot ducks out, curious hold, face drops, mascot home.
 static void run_peek(uint32_t now) {
     switch (step) {
-    case 0:  // hop (if any) landed; mascot leaving
+    case 0:  // hop (if any) landed; keep nudging until away
+        if (!mascot_away() && !mascot_busy()) mascot_leave(PEEK_LEAVE_PCT);
         if (mascot_away()) {
             face_set_resting(true);
             next_step();
@@ -577,6 +588,13 @@ void director_tick(void) {
     const int activity = signals_activity();
     show_gate_update(&show_gate, now, activity, &clawd_tuning());
     if (activity > 0) last_engagement = now;
+    // If the user has swiped to another screen, clean up face/performer immediately.
+    if (ui_get_current_screen() != SCREEN_USAGE && (face_visible() || performer_visible())) {
+        face_hide_now();
+        if (performer_visible()) { performer_release(); performer_run_off(PERFORMER_LEFT, 150, 300, 0); }
+        if (beat == B_SCREENSAVER || beat == B_PEEK || beat == B_SHOW)
+            { resume_screensaver = false; mascot_hurry_home(); go(B_CORNER); }
+    }
     face_tick();
     performer_tick();
 
