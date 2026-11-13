@@ -203,6 +203,7 @@ static void tap_home(int x) {
     TapReact r = clawd_tap_react(&in);
     if (r == TAP_PEEK_HOP && !mascot_act("jumping", 1, true, PEEK_HOP_PCT)) r = TAP_PEEK;
     if (r == TAP_PEEK) mascot_leave(PEEK_LEAVE_PCT);
+    if (r != TAP_NONE) face_rise_toward(x);
     if (r != TAP_NONE) {
         react_anim = NULL;
         peek_x = x;
@@ -223,7 +224,7 @@ void director_tap(int x) {
         return;
     }
     if (beat == B_PEEK) {
-        // Phase 2: face_visible() → to_meters(true); for now absorb taps mid-peek
+        if (face_visible()) { face_drop(); face_set_resting(false); }
         return;
     }
     to_meters(false);
@@ -409,24 +410,29 @@ static void run_attention(uint32_t now) {
     go(B_HOME);
 }
 
-// A tap on the meters. In Phase 1 he ducks out, waits a beat, then walks home.
-// Phase 2 adds the face coming up and the full peek script.
+// A tap on the meters: face rises, mascot ducks out, curious hold, face drops, mascot home.
 static void run_peek(uint32_t now) {
-    if (!settled()) return;
     switch (step) {
-    case 0:  // the hop has landed: he ducks out, quick
-        mascot_leave(PEEK_LEAVE_PCT);
-        next_step();
+    case 0:  // hop (if any) landed; mascot leaving
+        if (mascot_away()) {
+            face_set_resting(true);
+            next_step();
+        }
         break;
-    case 1:  // gone: Phase 2 would bring up the face; for now pause briefly
-        if (!mascot_away()) return;
-        peek_up_at = now;
-        next_step(2000);
+    case 1: { // curious: face is up and resting
+        PeekHold h = peek_hold(peek_up_at, now, &clawd_tuning());
+        if (h == PEEK_HOLD_DONE) {
+            face_drop();
+            face_set_resting(false);
+            next_step();
+        }
         break;
-    default:  // curious pause over: walk home (Phase 2: peek_hold → to_meters)
-        Serial.printf("[%lu] director: peek over\n", (unsigned long)now);
-        mascot_return(-1, 150);
-        go(B_CORNER);
+    }
+    default:  // face dropped; walk home
+        if (!face_visible()) {
+            mascot_return(-1, 150);
+            go(B_CORNER);
+        }
         break;
     }
 }
