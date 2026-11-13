@@ -245,6 +245,16 @@ a specific project.
 
 If you set an event token, add `-H "Authorization: Bearer <token>"` to each `curl` call.
 
+### Installing the skill globally
+
+If you work across multiple projects and want the hook-setup instructions available in every Claude Code session, install the bundled skill globally:
+
+```bash
+npx skills add mcdeck/clawdmeter-wifi --skill connect-to-claude-code -a claude-code -g -y
+```
+
+Requires Node.js 22.20+. After installing, `/connect-to-claude-code` is available in any Claude Code session.
+
 ### Event types
 
 | `t=` | Trigger | Clawd's reaction |
