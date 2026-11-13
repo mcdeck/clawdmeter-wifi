@@ -83,8 +83,14 @@ form{margin:0 0 8px}
 <h2>Security</h2>
 
 <form method="POST" action="/settings/webpass">
-  <label>Web UI Password</label>
+  <label>Web UI Authentication</label>
   <p class="info %WEB_PASS_CLASS%">%WEB_PASS_STATUS%</p>
+  <div class="row" style="margin-bottom:8px">
+    <input type="text" name="web_user"
+           placeholder="Username (default: admin)"
+           value="%WEB_USER%"
+           autocomplete="username">
+  </div>
   <div class="row">
     <input type="password" name="web_pass"
            placeholder="New password (empty = remove protection)"
@@ -92,8 +98,8 @@ form{margin:0 0 8px}
     <button type="submit">Save</button>
   </div>
   <p class="note">
-    Protects this settings page with HTTP Basic Auth (username: <code>admin</code>).<br>
-    To reset if locked out: serial console &rarr; <code>webpass</code> (clears password).<br>
+    Protects this settings page with HTTP Basic Auth.<br>
+    To reset if locked out: serial console &rarr; <code>webpass</code> (clears password), <code>webuser</code> (resets username).<br>
     <em>Credentials are sent in plaintext on your local network (HTTP, not HTTPS).</em>
   </p>
 </form>
@@ -155,7 +161,8 @@ markActive();
 static bool check_web_auth(void) {
     String pass = provisioning_get_webpass();
     if (pass.length() == 0) return true;
-    if (s_server.authenticate("admin", pass.c_str())) return true;
+    String user = provisioning_get_webuser();
+    if (s_server.authenticate(user.c_str(), pass.c_str())) return true;
     s_server.requestAuthentication(BASIC_AUTH, "ClawdMeter");
     return false;
 }
@@ -177,6 +184,7 @@ static String build_page(const char* banner) {
     html.replace("%BANNER%", banner ? banner : "");
     html.replace("%WEB_PASS_CLASS%",  has_pass ? "ok"  : "dim");
     html.replace("%WEB_PASS_STATUS%", has_pass ? "Currently protected" : "Currently no password");
+    html.replace("%WEB_USER%", provisioning_get_webuser());
     html.replace("%EVENT_TOKEN%", provisioning_get_event_token());
 
     // Build Clawd section with live NVS values pre-selected
@@ -386,6 +394,8 @@ static void handle_root(void) {
 
 static void handle_save_webpass(void) {
     if (!check_web_auth()) return;
+    String user = s_server.arg("web_user");
+    if (user.length() > 0) provisioning_save_webuser(user.c_str());
     String pass = s_server.arg("web_pass");
     provisioning_save_webpass(pass.c_str());
     s_server.sendHeader("Location", "/?saved=1");

@@ -15,8 +15,10 @@ String   provisioning_get_token(void);
 void provisioning_save_wifi(const char* ssid, const char* pass, const char* token);
 
 String provisioning_get_webpass(void);
+String provisioning_get_webuser(void);  // returns stored user or "admin" if unset
 String provisioning_get_event_token(void);
 void   provisioning_save_webpass(const char* pass);
+void   provisioning_save_webuser(const char* user);
 void   provisioning_save_event_token(const char* token);
 
 // Pending Wi-Fi credential trial — 30s safety revert.
