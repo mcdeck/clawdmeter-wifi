@@ -196,8 +196,8 @@ curl -s http://clawdmeter.local/event -X POST -d "t=p"
 # → HTTP 204 No Content (success) or 401 Unauthorized
 ```
 
-If mDNS doesn't work on your network, use the device's IP address instead
-(visible on the Wi-Fi screen, or check your router's DHCP table).
+If mDNS doesn't work on your network, find the IP on the device's Wi-Fi screen or
+your router's DHCP table, then set `CLAWDMETER_URL` as described in step 3.
 
 ### 2. Set an event token (optional but recommended)
 
@@ -206,16 +206,19 @@ home LAN). To require a secret:
 
 1. Open **http://clawdmeter.local** in a browser.
 2. Under **Hook event token**, enter any string and save.
-3. Add `Authorization: Bearer <token>` to your hook's `curl` call (see below).
+3. Add `-H "Authorization: Bearer <token>"` to your hook's `curl` call (see below).
 
 ### 3. Add hooks to Claude Code
 
-Add the following to your Claude Code settings file. The recommended location is
-`~/.claude/settings.json` (applies to all projects) or `.claude/settings.json` in
-a specific project.
+Add the following to `~/.claude/settings.json` (applies to all projects). The
+`CLAWDMETER_URL` env var overrides the default `clawdmeter.local` address — omit
+the `env` block if mDNS works on your network.
 
 ```json
 {
+  "env": {
+    "CLAWDMETER_URL": "http://192.168.1.42"
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -223,7 +226,7 @@ a specific project.
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sf http://clawdmeter.local/event -X POST -d 't=p' -o /dev/null"
+            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=p' -o /dev/null"
           }
         ]
       }
@@ -234,7 +237,7 @@ a specific project.
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sf http://clawdmeter.local/event -X POST -d 't=s' -o /dev/null"
+            "command": "curl -sf ${CLAWDMETER_URL:-http://clawdmeter.local}/event -X POST -d 't=s' -o /dev/null"
           }
         ]
       }
