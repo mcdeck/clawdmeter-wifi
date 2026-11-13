@@ -270,6 +270,29 @@ Requires Node.js 22.20+. After installing, `/connect-to-claude-code` is availabl
 The `es` (sequence), `n` (session count), and `a` (activity level 0–3) parameters are
 optional and can be omitted for simple integrations.
 
+### Director beats (QA / demos)
+
+You can trigger any director beat directly over HTTP — useful for QA, demos, or
+testing behaviour:
+
+```bash
+curl -sf http://clawdmeter.local/clawd -X POST -d "beat=attention" \
+  -H "Authorization: Bearer ${CLAWDMETER_TOKEN}"
+# → 204 success  |  409 beat refused (wrong state)
+```
+
+| Beat | What happens |
+|------|-------------|
+| `attention` | Big Clawd fetches you |
+| `peek` | Face rises, mascot ducks out |
+| `show` | Full-size performer walks on and performs |
+| `screensaver` | Mascot leaves, face rests on the glass |
+| `lurk` | Mascot starts a lurk trip (PSRAM only) |
+| `joy` | Jumping-happy animation |
+| `home` | Return to idle / dismiss any alert |
+
+The `/clawd` endpoint uses the same event token as `/event`.
+
 ### Tuning reactivity
 
 On **http://clawdmeter.local**, the **Clawd** section controls:

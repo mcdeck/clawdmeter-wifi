@@ -219,6 +219,15 @@ screenshot      dump LVGL framebuffer as raw RGB565 over serial
 buzz            play the session-reset chime now (ignores the opt-in)
 chime on|off    enable/disable the session-reset chime (NVS, default off)
 chime           print the current chime setting
+clawd <beat>    director QA: attention, peek, show, screensaver, lurk, joy, home,
+                             trace (toggle step logging), liveliness (print level)
+```
+
+The same beats are reachable over HTTP once Wi-Fi is up:
+
+```bash
+curl -sf http://clawdmeter.local/clawd -X POST -d "beat=screensaver"
+# → 204 success  |  409 refused (wrong state)  |  401 token required
 ```
 
 ---

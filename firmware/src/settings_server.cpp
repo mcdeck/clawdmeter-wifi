@@ -477,6 +477,24 @@ void settings_server_init(void) {
         s_server.on("/save-settings",         HTTP_POST, handle_save_settings);
         s_server.on("/save-connection",       HTTP_POST, handle_save_connection);
         s_server.on("/event",                 HTTP_POST, handle_event);
+        s_server.on("/clawd",                 HTTP_POST, []() {
+            if (!check_event_token()) return;
+            String beat = s_server.arg("beat");
+            if (beat.length() == 0) {
+                s_server.send(400, "text/plain", "Missing beat parameter\n");
+                return;
+            }
+            // attention accepts an optional msg= override so hook integrations
+            // can show a meaningful string instead of the QA placeholder.
+            if (beat == "attention") {
+                String msg = s_server.arg("msg");
+                director_alert(msg.length() > 0 ? msg.c_str() : "Clawdmeter test alert");
+                s_server.send(204, "text/plain", "");
+                return;
+            }
+            bool ok = director_debug(beat.c_str());
+            s_server.send(ok ? 204 : 409, "text/plain", ok ? "" : "Beat refused (wrong state)\n");
+        });
         s_server.onNotFound([]() {
             s_server.sendHeader("Location", "/");
             s_server.send(302, "text/plain", "");
