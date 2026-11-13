@@ -2,6 +2,8 @@
 #include "clawd_policy.h"
 #include "clawd_anim.h"
 #include "mascot.h"
+#include "face.h"
+#include "performer.h"
 #include "ui.h"
 #include "idle.h"
 #include "minimal_mode.h"
@@ -88,9 +90,9 @@ static void next_step(uint32_t pause_ms = 0) {
     wait_until = now_ms() + pause_ms;
 }
 
-// Phase 2: will also check !face_moving() && !performer_busy()
 static bool settled(void) {
-    return !mascot_busy() && (int32_t)(millis() - wait_until) >= 0;
+    return !mascot_busy() && !face_moving() && !performer_busy()
+           && (int32_t)(millis() - wait_until) >= 0;
 }
 
 static void engage(void) { last_engagement = now_ms(); }
@@ -316,7 +318,6 @@ static void apply_minimal(bool on) {
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 void director_init(void) {
-    // Phase 2: face_init()
     show_gate_clear(&show_gate);
     turn_clear(&turn);
     clawd_rng_seed(&rng, now_ms() ^ 0xD1EC7u);
@@ -334,6 +335,8 @@ void director_init(void) {
     lv_obj_t* parent = ui_mascot_parent();
     lv_obj_t* result = mascot_create(parent, slot_x, feet_y, cell);
     if (!result) Serial.println("[director] WARN: mascot_create returned NULL — sprite won't render");
+    face_init();
+    performer_init(parent, bc.height * 7 / 8);
 
     // Taps on the usage screen are routed via global_click_cb (LV_EVENT_CLICKED)
     // in ui.cpp, which calls director_tap(). No indev-level hook needed here.
@@ -433,7 +436,8 @@ void director_tick(void) {
     const int activity = signals_activity();
     show_gate_update(&show_gate, now, activity, &clawd_tuning());
     if (activity > 0) last_engagement = now;
-    // Phase 2: face_tick()
+    face_tick();
+    performer_tick();
 
     switch (beat) {
     case B_HOME:        run_home(now); break;
