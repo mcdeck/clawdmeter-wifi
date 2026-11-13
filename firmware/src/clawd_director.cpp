@@ -375,9 +375,8 @@ static void run_home(uint32_t now) {
     // Phase 2: screensaver
     (void)q;
     // if (screensaver_ready(&q, &clawd_tuning())) { go(B_SCREENSAVER); return; }
-    // Phase 2: show
-    // if (live && signals_hooks_seen() && show_gate_ready(&show_gate, now, &clawd_tuning()))
-    //     go(B_SHOW);
+    if (live && signals_hooks_seen() && show_gate_ready(&show_gate, now, &clawd_tuning()))
+        { go(B_SHOW); return; }
 }
 
 static void run_attention(uint32_t now) {
@@ -408,6 +407,52 @@ static void run_attention(uint32_t now) {
         return;
     }
     go(B_HOME);
+}
+
+static void run_show(uint32_t now) {
+    (void)now;
+    if (!performer_available()) {
+        if (mascot_act("dancing", 2)) go(B_CORNER);
+        return;
+    }
+    switch (step) {
+    case 0:
+        if (mascot_act("pointing", 1)) next_step();
+        break;
+    case 1:
+        if (!settled()) return;
+        mascot_leave(150);
+        performer_place_offstage(PERFORMER_RIGHT);
+        next_step();
+        break;
+    case 2:
+        if (!mascot_away()) return;
+        performer_walk_home(150);
+        next_step();
+        break;
+    case 3:
+        if (performer_busy()) return;
+        show_gate_mark_shown(&show_gate, now_ms());
+        performer_perform_group(clawd_show_group(usage_rate_group()),
+                                clawd_tuning().show_scene_ms, false);
+        next_step();
+        break;
+    case 4:
+        if (performer_busy()) return;
+        mascot_act("waving", 1);
+        next_step();
+        break;
+    case 5:
+        if (!settled()) return;
+        performer_walk_off(PERFORMER_LEFT, 150);
+        next_step();
+        break;
+    default:
+        if (performer_busy()) return;
+        mascot_return(-1, 150);
+        go(B_CORNER);
+        break;
+    }
 }
 
 // A tap on the meters: face rises, mascot ducks out, curious hold, face drops, mascot home.
@@ -448,7 +493,7 @@ void director_tick(void) {
     switch (beat) {
     case B_HOME:        run_home(now); break;
     case B_CORNER:      run_corner(now); break;
-    case B_SHOW:        go(B_HOME); break;        // Phase 2
+    case B_SHOW:        run_show(now); break;
     case B_SCREENSAVER: go(B_HOME); break;        // Phase 2
     case B_FACE_HOME:   go(B_HOME); break;        // Phase 2
     case B_RUN_HOME:    go(B_HOME); break;        // Phase 2
