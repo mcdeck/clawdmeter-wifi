@@ -41,6 +41,8 @@ static inline void director_set_pairing_touch(bool on) { (void)on; }
 bool director_button(bool main_button);
 // Apply a liveliness level (clawd_policy.h) now.
 void director_set_liveliness(int level);
+// Apply feature prefs (feature_pref.h) now — call after changing any feature pref.
+void director_apply_feature_prefs(void);
 
 // How long Clawd's attention animation runs, in seconds (clawd_policy.h; 0 = off).
 void director_set_attn_anim(int seconds);

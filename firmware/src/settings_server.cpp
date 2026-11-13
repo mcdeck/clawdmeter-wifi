@@ -3,6 +3,7 @@
 #include "hook_event.h"
 #include "clawd_prefs.h"
 #include "clawd_director.h"
+#include "feature_pref.h"
 #include "clock_pref.h"
 #include "pace_pref.h"
 #include "button_pref.h"
@@ -149,7 +150,11 @@ static String build_page(const char* banner) {
     // Build Clawd section with live NVS values pre-selected
     int lv   = liveliness_get();
     int attn = clawd_attn_anim();
-    char clawd[2048];
+    bool fp_shows = feature_pref_shows();
+    bool fp_scrn  = feature_pref_screensaver();
+    bool fp_idle  = feature_pref_idle_acts();
+    bool fp_react = feature_pref_reactions();
+    char clawd[3072];
     snprintf(clawd, sizeof(clawd),
         "<section>"
         "<h2>Clawd</h2>"
@@ -169,12 +174,19 @@ static String build_page(const char* banner) {
         "<option value=\"10\"%s>10 s</option>"
         "<option value=\"0\"%s>Off</option>"
         "</select></label>"
-        "<button type=\"submit\">Save Clawd settings</button>"
+        "<p class=\"note\" style=\"margin-top:14px\">Features (apply on top of liveliness)</p>"
+        "<label><input type=\"checkbox\" name=\"feat_shows\"%s> Shows &mdash; earned performance after a busy stretch</label>"
+        "<label><input type=\"checkbox\" name=\"feat_scrn\"%s> Screensaver &mdash; face rests when you&rsquo;re away</label>"
+        "<label><input type=\"checkbox\" name=\"feat_idle\"%s> Idle acts &mdash; corner autonomy between tasks</label>"
+        "<label><input type=\"checkbox\" name=\"feat_react\"%s> Reactions &mdash; notices prompts, waves on long turns</label>"
+        "<br><button type=\"submit\">Save Clawd settings</button>"
         "</form></section>",
         lv==1?" selected":"", lv==2?" selected":"", lv==3?" selected":"",
         lv==4?" selected":"", lv==5?" selected":"",
         attn==120?" selected":"", attn==30?" selected":"",
-        attn==10?" selected":"", attn==0?" selected":""
+        attn==10?" selected":"", attn==0?" selected":"",
+        fp_shows?" checked":"", fp_scrn?" checked":"",
+        fp_idle?" checked":"", fp_react?" checked":""
     );
     html.replace("%CLAWD_SECTION%", clawd);
 
@@ -471,6 +483,11 @@ void settings_server_init(void) {
             liveliness_set(lv);
             director_set_liveliness(lv);  // propagate to running director immediately
             attn_anim_set(attn);
+            feature_pref_set_shows(s_server.hasArg("feat_shows"));
+            feature_pref_set_screensaver(s_server.hasArg("feat_scrn"));
+            feature_pref_set_idle_acts(s_server.hasArg("feat_idle"));
+            feature_pref_set_reactions(s_server.hasArg("feat_react"));
+            director_apply_feature_prefs();
             s_server.sendHeader("Location", "/?saved=1");
             s_server.send(303);
         });

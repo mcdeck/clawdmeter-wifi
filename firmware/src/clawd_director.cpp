@@ -1,5 +1,6 @@
 #include "clawd_director.h"
 #include "clawd_policy.h"
+#include "feature_pref.h"
 #include "clawd_anim.h"
 #include "mascot.h"
 #include "face.h"
@@ -266,13 +267,23 @@ void director_on_reset(void) {
     }
 }
 
-void director_set_liveliness(int level) {
-    clawd_set_liveliness(level);
+static void apply_tuning_side_effects(void) {
     const ClawdTuning& t = clawd_tuning();
     if (!t.reactions) { react_anim = NULL; joy_pending = false; }
     if (!t.screensaver) resume_screensaver = false;
     if ((beat == B_SHOW && !t.shows) || (beat == B_SCREENSAVER && !t.screensaver)) to_meters(false);
     mascot_autonomy(beat == B_HOME && !minimal && t.idle_acts);
+}
+
+void director_set_liveliness(int level) {
+    clawd_set_liveliness(level);
+    feature_pref_apply(&clawd_tuning());
+    apply_tuning_side_effects();
+}
+
+void director_apply_feature_prefs(void) {
+    feature_pref_apply(&clawd_tuning());
+    apply_tuning_side_effects();
 }
 
 static void indev_cb(lv_event_t* e) {

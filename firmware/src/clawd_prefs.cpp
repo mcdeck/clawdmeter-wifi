@@ -1,4 +1,5 @@
 #include "clawd_prefs.h"
+#include "feature_pref.h"
 #include <Preferences.h>
 #include <Arduino.h>
 
@@ -20,6 +21,8 @@ void clawd_prefs_init(void) {
     prefs.end();
     clawd_set_liveliness(clawd_liveliness_clamp(lively));
     clawd_set_attn_anim(clawd_attn_anim_clamp(attn));
+    feature_pref_load();
+    feature_pref_apply(&clawd_tuning());
     Serial.printf("clawd_prefs: liveliness %d, attn_anim %d s\n",
                   clawd_liveliness(), clawd_attn_anim());
 }
